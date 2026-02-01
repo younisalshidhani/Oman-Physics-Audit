@@ -2,28 +2,23 @@ import streamlit as st
 import fitz 
 import google.generativeai as genai
 
-st.set_page_config(page_title="المقوم التربوي - نسخة المختبر", layout="wide")
+# 1. إعداد الصفحة والاتجاه من اليمين لليسار
+st.set_page_config(page_title="المقوم التربوي الذكي", layout="wide")
 
-# تهيئة الذاكرة
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-if "last_report" not in st.session_state:
-    st.session_state.last_report = ""
-
-# واجهة مستخدم نظيفة
 st.markdown("""
-    <div style="background-color:#ffffff;padding:15px;border-radius:10px;border-right:8px solid #2ecc71;box-shadow: 0 2px 10px rgba(0,0,0,0.05)">
-        <h2 style="margin:0;color:#2c3e50">🛡️ نظام التدقيق التقني المركّز</h2>
-        <p style="margin:0;color:#7f8c8d">تحليل مباشر | مطابقة صارمة | لغة تقنية</p>
-    </div>
+    <style>
+    .stApp { direction: rtl; text-align: right; }
+    div[data-testid="stExpander"] div[role="button"] p { font-size: 1.2rem; font-weight: bold; }
+    .report-card { background-color: #f8f9fa; padding: 20px; border-radius: 10px; border-right: 5px solid #2ecc71; margin-bottom: 20px; }
+    </style>
     """, unsafe_allow_html=True)
 
+# واجهة المستخدم
+st.markdown('<div class="report-card"><h1>🛡️ المقوم التربوي الذكي (نسخة التدقيق المتقدمة)</h1><p>تحليل تخصصي شامل: المادة - الوثيقة - الكتاب</p></div>', unsafe_allow_html=True)
+
 with st.sidebar:
-    api_key = st.text_input("API Key:", type="password")
-    if st.button("🗑️ مسح الجلسة"):
-        st.session_state.chat_history = []
-        st.session_state.last_report = ""
-        st.rerun()
+    st.header("⚙️ الإعدادات")
+    api_key = st.text_input("مفتاح API:", type="password")
 
 if api_key:
     try:
@@ -31,59 +26,56 @@ if api_key:
         model = genai.GenerativeModel('gemini-2.5-flash') 
         
         col1, col2, col3 = st.columns(3)
-        with col1: test_file = st.file_uploader("الاختبار (PDF)", type="pdf")
-        with col2: policy_file = st.file_uploader("الوثيقة (PDF)", type="pdf")
-        with col3: book_file = st.file_uploader("الكتاب (PDF)", type="pdf")
+        with col1: test_file = st.file_uploader("📄 ملف الاختبار", type="pdf")
+        with col2: policy_file = st.file_uploader("📜 وثيقة التقويم", type="pdf")
+        with col3: book_file = st.file_uploader("📚 كتاب الطالب", type="pdf")
         
-        if test_file and st.button("🔍 تحليل البيانات"):
-            with st.spinner("جاري الاستخراج والمطابقة..."):
+        if test_file and st.button("🚀 تحليل ومطابقة البيانات"):
+            with st.spinner("جاري التمعن في تفاصيل الكتاب والوثيقة..."):
                 def get_text(file):
                     doc = fitz.open(stream=file.read(), filetype="pdf")
                     return "".join([page.get_text() for page in doc])
 
                 t_text = get_text(test_file)
-                p_text = get_text(policy_file) if policy_file else "المعايير القياسية"
-                b_text = get_text(book_file) if book_file else "المحتوى العلمي المرجعي"
+                p_text = get_text(policy_file) if policy_file else "معايير عامة"
+                b_text = get_text(book_file) if book_file else "محتوى الكتاب"
 
-                # البرومبت الجديد: التركيز على البيانات والابتعاد عن الإنشائيات
+                # البرومبت المطور بناءً على ملاحظاتك الأخيرة
                 prompt = f"""
-                بصفتك محلل بيانات تربوي، استخرج الأخطاء والمطابقات بدقة تقنية عالية.
+                بصفتك خبير جودة تربوي، حلل الاختبار بناءً على الكتاب والوثيقة المرفقين.
                 
-                المراجع: [وثيقة: {p_text} | كتاب: {b_text} | اختبار: {t_text}]
+                شروط التحليل الفني:
+                1. الجدول: (المفردة | الدرجة | الهدف | مطابقة الهدف للمفردة | الملاحظة | التعديل).
+                2. الملاحظة: اختصرها جداً، وركز على (الصور، الرسوم البيانية، الأشكال) ومدى جودتها ومطابقتها للكتاب.
+                3. مطابقة الهدف: وضح هل الهدف المقاس في الاختبار يطابق المخطط له في الوثيقة (نعم/لا مع السبب).
+                4. التنظيم: اجعل الرد من اليمين لليسار.
                 
-                قواعد الرد الصارمة:
-                1. ممنوع المقدمات (أهلاً، بصفتي، إلخ).
-                2. الجدول: (المفردة | الدرجة | الهدف | الملاحظة | التعديل).
-                3. الملاحظة: يجب أن تكون تقنية مباشرة (مثال: "مخالف لصفحة 32"، "نقص بديل"، "هدف غير مطابق").
-                4. النسبة: رقم مئوي بناءً على (صحة علمية + مطابقة مواصفات).
-                5. التوصية: جملة واحدة تقنية فقط.
+                البيانات المرفقة:
+                - الوثيقة: {p_text}
+                - الكتاب: {b_text}
+                - الاختبار: {t_text}
+                
+                بعد الجدول:
+                - ملاحظات إضافية مرتبة في نقاط متباعدة.
+                - عبارة تقييمية نهائية للاختبار ونسبة المطابقة الإجمالية (%).
                 """
                 
                 response = model.generate_content(prompt)
                 st.session_state.last_report = response.text
 
-        if st.session_state.last_report:
+        if "last_report" in st.session_state and st.session_state.last_report:
             st.markdown("---")
-            st.markdown(st.session_state.last_report)
+            st.markdown(f'<div style="direction: rtl;">{st.session_state.last_report}</div>', unsafe_allow_html=True)
             
-            # قسم الدردشة التقنية
+            # إطار المحادثة
             st.markdown("---")
-            st.subheader("💬 نقاش تقني حول النتائج")
-            for msg in st.session_state.chat_history:
-                with st.chat_message(msg["role"]): st.markdown(msg["content"])
-
-            if user_input := st.chat_input("اسأل عن تفاصيل تقنية محددة..."):
-                st.session_state.chat_history.append({"role": "user", "content": user_input})
-                with st.chat_message("user"): st.markdown(user_input)
-
-                with st.chat_message("assistant"):
-                    # توجيه الدردشة لتكون مختصرة أيضاً
-                    chat_prompt = f"أجب باختصار شديد ودقة تقنية بناءً على هذا التقرير: {st.session_state.last_report}\nالسؤال: {user_input}"
-                    chat_response = model.generate_content(chat_prompt)
-                    st.markdown(chat_response.text)
-                    st.session_state.chat_history.append({"role": "assistant", "content": chat_response.text})
+            st.subheader("💬 ناقش الخبير حول التفاصيل")
+            user_input = st.chat_input("اسأل عن الرسم البياني أو تفصيل في الكتاب...")
+            if user_input:
+                chat_response = model.generate_content(f"بناءً على التقرير السابق، أجب باختصار من اليمين لليسار: {user_input}")
+                st.info(chat_response.text)
 
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"تنبيه تقني: {e}")
 else:
-    st.info("أدخل مفتاح API للبدء.")
+    st.info("يرجى إدخال مفتاح API للبدء.")
