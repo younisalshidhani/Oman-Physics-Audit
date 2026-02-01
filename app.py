@@ -1,63 +1,85 @@
 import streamlit as st
 import fitz 
 import google.generativeai as genai
+from fpdf import FPDF
+import base64
 
-# 1. إعداد الصفحة والاتجاه من اليمين لليسار
-st.set_page_config(page_title="المقوم التربوي الذكي", layout="wide")
+# إعداد الصفحة والاتجاه
+st.set_page_config(page_title="المقوم التربوي الاحترافي", layout="wide")
 
 st.markdown("""
     <style>
     .stApp { direction: rtl; text-align: right; }
-    div[data-testid="stExpander"] div[role="button"] p { font-size: 1.2rem; font-weight: bold; }
-    .report-card { background-color: #f8f9fa; padding: 20px; border-radius: 10px; border-right: 5px solid #2ecc71; margin-bottom: 20px; }
+    .evaluation-box { 
+        background-color: #e8f4fd; 
+        padding: 20px; 
+        border-radius: 15px; 
+        border: 2px solid #3498db;
+        margin-top: 30px;
+        font-weight: bold;
+    }
     </style>
     """, unsafe_allow_html=True)
 
-# واجهة المستخدم
-st.markdown('<div class="report-card"><h1>🛡️ المقوم التربوي الذكي (نسخة التدقيق المتقدمة)</h1><p>تحليل تخصصي شامل: المادة - الوثيقة - الكتاب</p></div>', unsafe_allow_html=True)
+# وظيفة تصدير PDF (دعم أساسي للنص)
+def create_pdf(text):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+    # ملاحظة: FPDF تحتاج إعدادات خاصة للغة العربية، هنا سنقوم بتصدير النص الخام
+    pdf.multi_cell(0, 10, txt=text.encode('latin-1', 'replace').decode('latin-1'))
+    return pdf.output(dest='S').encode('latin-1')
 
 with st.sidebar:
-    st.header("⚙️ الإعدادات")
+    st.header("⚙️ الإعدادات والتحكم")
     api_key = st.text_input("مفتاح API:", type="password")
+    selected_pages = st.text_input("حدد صفحات الكتاب (مثلاً: 30-35):", placeholder="اتركه فارغاً لكل الكتاب")
 
 if api_key:
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-2.5-flash') 
         
+        st.write("### 📁 المستندات المرجعية")
         col1, col2, col3 = st.columns(3)
         with col1: test_file = st.file_uploader("📄 ملف الاختبار", type="pdf")
         with col2: policy_file = st.file_uploader("📜 وثيقة التقويم", type="pdf")
         with col3: book_file = st.file_uploader("📚 كتاب الطالب", type="pdf")
         
-        if test_file and st.button("🚀 تحليل ومطابقة البيانات"):
-            with st.spinner("جاري التمعن في تفاصيل الكتاب والوثيقة..."):
-                def get_text(file):
+        if test_file and st.button("🚀 إجراء المطابقة النهائية"):
+            with st.spinner("جاري التمعن في الصفحات المحددة والمطابقة..."):
+                def get_text(file, pages_range=None):
                     doc = fitz.open(stream=file.read(), filetype="pdf")
-                    return "".join([page.get_text() for page in doc])
+                    text = ""
+                    # إذا تم تحديد صفحات، نقوم باستخراجها فقط
+                    if pages_range:
+                        try:
+                            start, end = map(int, pages_range.split('-'))
+                            for i in range(start-1, min(end, len(doc))):
+                                text += doc[i].get_text()
+                        except: text = "".join([page.get_text() for page in doc])
+                    else:
+                        text = "".join([page.get_text() for page in doc])
+                    return text
 
                 t_text = get_text(test_file)
-                p_text = get_text(policy_file) if policy_file else "معايير عامة"
-                b_text = get_text(book_file) if book_file else "محتوى الكتاب"
+                p_text = get_text(policy_file) if policy_file else "المعايير العامة"
+                b_text = get_text(book_file, selected_pages) if book_file else "محتوى الكتاب"
 
-                # البرومبت المطور بناءً على ملاحظاتك الأخيرة
                 prompt = f"""
-                بصفتك خبير جودة تربوي، حلل الاختبار بناءً على الكتاب والوثيقة المرفقين.
+                بصفتك خبير جودة، حلل الاختبار بناءً على المراجع المرفقة (خاصة صفحات الكتاب المحددة).
                 
-                شروط التحليل الفني:
-                1. الجدول: (المفردة | الدرجة | الهدف | مطابقة الهدف للمفردة | الملاحظة | التعديل).
-                2. الملاحظة: اختصرها جداً، وركز على (الصور، الرسوم البيانية، الأشكال) ومدى جودتها ومطابقتها للكتاب.
-                3. مطابقة الهدف: وضح هل الهدف المقاس في الاختبار يطابق المخطط له في الوثيقة (نعم/لا مع السبب).
-                4. التنظيم: اجعل الرد من اليمين لليسار.
+                الجدول: (المفردة | الدرجة | الهدف | مطابقة الهدف | الملاحظة الفنية | التعديل المقترح).
+                * ركز بشدة على دقة (الرسوم البيانية، الصور، الأشكال) ومطابقتها للكتاب.
+                * اختصر الملاحظات لتكون تقنية بحتة.
                 
-                البيانات المرفقة:
-                - الوثيقة: {p_text}
-                - الكتاب: {b_text}
-                - الاختبار: {t_text}
+                المراجع:
+                - الصفحات المستهدفة من الكتاب: {b_text[:5000]} 
+                - وثيقة التقويم: {p_text[:2000]}
+                - نص الاختبار: {t_text}
                 
-                بعد الجدول:
-                - ملاحظات إضافية مرتبة في نقاط متباعدة.
-                - عبارة تقييمية نهائية للاختبار ونسبة المطابقة الإجمالية (%).
+                في نهاية التقرير:
+                ضع "العبارة التقييمية النهائية" ونسبة المطابقة (%) بشكل بارز جداً ومنفصل.
                 """
                 
                 response = model.generate_content(prompt)
@@ -65,17 +87,16 @@ if api_key:
 
         if "last_report" in st.session_state and st.session_state.last_report:
             st.markdown("---")
-            st.markdown(f'<div style="direction: rtl;">{st.session_state.last_report}</div>', unsafe_allow_html=True)
+            st.markdown(st.session_state.last_report)
             
-            # إطار المحادثة
-            st.markdown("---")
-            st.subheader("💬 ناقش الخبير حول التفاصيل")
-            user_input = st.chat_input("اسأل عن الرسم البياني أو تفصيل في الكتاب...")
-            if user_input:
-                chat_response = model.generate_content(f"بناءً على التقرير السابق، أجب باختصار من اليمين لليسار: {user_input}")
-                st.info(chat_response.text)
+            # زر التصدير
+            pdf_data = create_pdf(st.session_state.last_report)
+            st.download_button(label="📥 تحميل التقرير كـ PDF", 
+                               data=pdf_data, 
+                               file_name="Audit_Report.pdf", 
+                               mime="application/pdf")
 
     except Exception as e:
-        st.error(f"تنبيه تقني: {e}")
+        st.error(f"تنبيه: {e}")
 else:
     st.info("يرجى إدخال مفتاح API للبدء.")
