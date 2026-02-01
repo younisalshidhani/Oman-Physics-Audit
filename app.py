@@ -2,43 +2,38 @@ import streamlit as st
 import fitz 
 import google.generativeai as genai
 from fpdf import FPDF
-import base64
+from arabic_reshaper import reshape
+from bidi.algorithm import get_display
 
-# إعداد الصفحة والاتجاه العربي الكامل
+# إعداد الصفحة والاتجاه
 st.set_page_config(page_title="المقوم التربوي الاحترافي", layout="wide")
 
+# تنسيق الواجهة لتبدو احترافية
 st.markdown("""
     <style>
     .stApp { direction: rtl; text-align: right; }
-    .eval-footer { 
-        background-color: #f0f7ff; 
-        padding: 25px; 
-        border-radius: 12px; 
-        border-right: 10px solid #28a745;
-        margin-top: 50px;
-        line-height: 1.8;
-    }
+    .report-container { background-color: #ffffff; padding: 25px; border-radius: 15px; border: 1px solid #e0e0e0; }
+    .eval-box { background-color: #f0f9ff; padding: 20px; border-right: 10px solid #007bff; margin-top: 30px; }
     </style>
     """, unsafe_allow_html=True)
 
 with st.sidebar:
-    st.header("⚙️ خيارات التدقيق")
+    st.header("⚙️ الإعدادات")
     api_key = st.text_input("مفتاح API:", type="password")
-    pg_range = st.text_input("نطاق صفحات الكتاب (مثلاً 20-25):")
+    pg_range = st.text_input("الصفحات المستهدفة (مثلاً 12-15):")
 
 if api_key:
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-2.5-flash') 
         
-        st.write("### 📁 المستندات المرجعية")
         col1, col2, col3 = st.columns(3)
-        with col1: t_file = st.file_uploader("📄 ملف الاختبار", type="pdf")
-        with col2: p_file = st.file_uploader("📜 وثيقة التقويم", type="pdf")
-        with col3: b_file = st.file_uploader("📚 كتاب الطالب", type="pdf")
+        with col1: t_file = st.file_uploader("📄 الاختبار", type="pdf")
+        with col2: p_file = st.file_uploader("📜 الوثيقة", type="pdf")
+        with col3: b_file = st.file_uploader("📚 الكتاب", type="pdf")
         
-        if t_file and st.button("🚀 تنفيذ التحليل الفني الشامل"):
-            with st.spinner("جاري التمعن في الرسوم والتفاصيل العلمية..."):
+        if t_file and st.button("🚀 تحليل عميق وشامل"):
+            with st.spinner("جاري فحص الرسوم والبيانات والمطابقة..."):
                 def extract(file, r=None):
                     doc = fitz.open(stream=file.read(), filetype="pdf")
                     if r:
@@ -49,23 +44,18 @@ if api_key:
                     return "".join([p.get_text() for p in doc])
 
                 test_txt = extract(t_file)
-                pol_txt = extract(p_file) if p_file else "معايير عمان"
-                book_txt = extract(b_file, pg_range) if b_file else "محتوى الكتاب"
+                pol_txt = extract(p_file) if p_file else "وثيقة عمان"
+                book_txt = extract(b_file, pg_range) if b_file else "محتوى المادة"
 
+                # البرومبت المطور لمنع انهيار الجدول
                 prompt = f"""
-                أنت خبير جودة تربوي عماني. حلل الاختبار بناءً على المرفقات بدقة متناهية.
-                المطلوب:
-                1. جدول Markdown: (المفردة | الدرجة | الهدف | مطابقة الهدف | الملاحظة الفنية | التعديل المقترح).
-                2. الملاحظات الفنية: ركز على دقة (الرسوم البيانية، الصور، الأشكال) ومطابقتها لصفحات الكتاب المرفقة.
-                3. التنسيق: اختصر الملاحظات جداً دون إغفال النقاط المهمة.
+                أنت خبير تربوي. حلل الاختبار بناءً على المرفقات.
+                البيانات: [كتاب: {book_txt} | وثيقة: {pol_txt} | اختبار: {test_txt}]
                 
-                البيانات:
-                - الكتاب (الصفحات المحددة): {book_txt}
-                - الوثيقة: {pol_txt}
-                - الاختبار: {test_txt}
-                
-                خاتمة التقرير:
-                أضف قسماً بعنوان "التقييم النهائي الشامل" يتضمن عبارة تقييمية منظمة، تليها نسبة المطابقة (%) في سطر منفصل وبحجم بارز.
+                المطلوب حرفياً وبدون أي كلام جانبي:
+                1. جدول Markdown صحيح (أعمدة: المفردة، الدرجة، الهدف، مطابقة الهدف، الملاحظة الفنية، التعديل المقترح).
+                2. ركز الملاحظة على (الرسوم البيانية والصور والأشكال) ومدى دقتها علمياً مقارنة بالكتاب.
+                3. بعد الجدول، اترك مسافة كبيرة ثم ضع: "التقييم النهائي الشامل" متبوعاً بعبارة تقييمية ونسبة المطابقة (%).
                 """
                 
                 res = model.generate_content(prompt)
@@ -73,17 +63,12 @@ if api_key:
 
         if "report" in st.session_state:
             st.markdown("---")
-            # عرض التقرير مع تنظيم الفقرات السفلية
-            formatted_report = st.session_state.report.replace("التقييم النهائي الشامل", '<div class="eval-footer"><h3>التقييم النهائي الشامل</h3>')
-            if "التقييم النهائي الشامل" in st.session_state.report:
-                formatted_report += "</div>"
+            # عرض التقرير في حاوية منظمة لضمان ظهور الجدول كجدول
+            with st.container():
+                st.markdown(st.session_state.report)
             
-            st.markdown(formatted_report, unsafe_allow_html=True)
-            
-            # زر التحميل PDF (مبسط لتجنب أخطاء الخطوط العربية في المكتبات البرمجية)
-            st.download_button("📥 تحميل النص كملف تدقيق", st.session_state.report, "Audit_Report.txt")
+            # زر التحميل كملف نصي منظم (لضمان سلامة اللغة العربية)
+            st.download_button("📥 تحميل التقرير (Text)", st.session_state.report, "Final_Audit.txt")
 
     except Exception as e:
-        st.error(f"خطأ: {e}")
-else:
-    st.info("أدخل API Key للبدء.")
+        st.error(f"حدث خطأ: {e}")
