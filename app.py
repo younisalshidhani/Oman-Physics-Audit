@@ -21,7 +21,7 @@ if api_key:
                 text = "".join([page.get_text() for page in doc])
                 
                 # التعديل الجوهري هنا لضمان عمل الموديل
-                model = genai.GenerativeModel('gemini-1.5-flash-latest') 
+                model = genai.GenerativeModel('gemini-1.5-flash-001') 
                 
                 prompt = f"بصفتك خبير تربوي عماني، حلل هذا الاختبار بناءً على وثيقة التقويم (10 درجات) وكتاب الفيزياء ص 32: {text}"
                 
@@ -35,3 +35,4 @@ if api_key:
         st.info("نصيحة: تأكد أن مفتاح API مفعل وأنك تستخدم إصداراً حديثاً من الموديل.")
 else:
     st.info("يرجى إدخال مفتاح API في القائمة الجانبية للبدء.")
+
