@@ -1,6 +1,3 @@
 streamlit
 google-generativeai>=0.7.0
 pymupdf
-fpdf2
-arabic-reshaper
-python-bidi
