@@ -2,17 +2,17 @@ import streamlit as st
 import fitz 
 import google.generativeai as genai
 
-# إعداد الصفحة والواجهة
-st.set_page_config(page_title="المقوم التربوي العماني", layout="wide")
+# إعداد الصفحة والواجهة العربية
+st.set_page_config(page_title="المحلل التربوي العماني", layout="wide")
 
 st.markdown("""
     <style>
     .stApp { direction: rtl; text-align: right; }
-    .official-card { background-color: #f8fbff; padding: 25px; border-radius: 15px; border-right: 10px solid #007bff; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+    .official-box { background-color: #f0f7ff; padding: 20px; border-radius: 10px; border-right: 10px solid #007bff; margin-bottom: 25px; }
     </style>
     """, unsafe_allow_html=True)
 
-# استعادة القائمة الجانبية بكامل خياراتها الأصلية
+# استعادة القائمة الجانبية الأصلية (Sidebar)
 with st.sidebar:
     st.header("⚙️ خيارات التدقيق")
     api_key = st.text_input("مفتاح API:", type="password")
@@ -20,68 +20,67 @@ with st.sidebar:
     semester = st.selectbox("الفصل الدراسي:", ["الأول", "الثاني"])
     grade_level = st.selectbox("المرحلة الصفية:", ["الحادي عشر", "الثاني عشر"])
     exam_type = st.selectbox("نوع الاختبار:", ["قصير", "استقصائي"])
-    pg_range = st.text_input("نطاق الصفحات (مثلاً 10-15):", value="77-97")
+    pg_range = st.text_input("نطاق الصفحات (مثلاً 77-97):", value="77-97")
 
 if api_key:
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-1.5-flash')
         
-        st.markdown(f'<div class="official-card"><h2>نظام تحليل {exam_type} - مادة {subject}</h2><p>وفق وثيقة تقويم تعلم الطلبة ومعايير سلطنة عمان</p></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="official-box"><h2>نظام تحليل {exam_type} - مادة {subject}</h2><p>وفق النموذج الرسمي المعتمد</p></div>', unsafe_allow_html=True)
         
         col1, col2, col3 = st.columns(3)
-        with col1: t_file = st.file_uploader("📄 1. ملف الاختبار (PDF)", type="pdf")
-        with col2: p_file = st.file_uploader("📜 2. وثيقة التقويم (PDF)", type="pdf")
-        with col3: b_file = st.file_uploader("📚 3. كتاب الطالب (PDF)", type="pdf")
+        with col1: t_file = st.file_uploader("📄 1. ملف الاختبار", type="pdf")
+        with col2: p_file = st.file_uploader("📜 2. وثيقة التقويم", type="pdf")
+        with col3: b_file = st.file_uploader("📚 3. كتاب الطالب", type="pdf")
         
         if t_file and st.button("🚀 بدء المطابقة والتحليل الشامل"):
-            with st.spinner("جاري استخراج البيانات وتطبيق النموذج الرسمي..."):
-                def extract_text(file, pages=None):
+            with st.spinner("جاري التحليل واستخراج الجداول الرسمية..."):
+                def get_pdf_text(file, r=None):
                     if not file: return ""
                     doc = fitz.open(stream=file.read(), filetype="pdf")
-                    if pages and '-' in pages:
+                    if r and '-' in r:
                         try:
-                            start, end = map(int, pages.split('-'))
-                            return "".join([doc[i].get_text() for i in range(max(0, start-1), min(end, len(doc)))])
+                            s, e = map(int, r.split('-'))
+                            return "".join([doc[i].get_text() for i in range(max(0, s-1), min(e, len(doc)))])
                         except: pass
-                    return "".join([page.get_text() for page in doc])
+                    return "".join([p.get_text() for p in doc])
 
-                # استخراج النصوص بأسماء متغيرات صحيحة
-                test_data = extract_text(t_file)
-                book_data = extract_text(b_file, pg_range)
-                policy_data = extract_text(p_file)
+                # استخراج النصوص بأسماء متغيرات دقيقة لتجنب NameError
+                test_text = get_pdf_text(t_file)
+                book_text = get_pdf_text(b_file, pg_range)
+                policy_text = get_pdf_text(p_file)
 
-                # بناء البرومبت بناءً على نموذج الوورد الرسمي المرفق
                 prompt = f"""
-                أنت خبير تقويم تربوي عماني. حلل الاختبار بناءً على النموذج الرسمي التالي:
+                أنت خبير تربوي. حلل الاختبار بناءً على النموذج الرسمي التالي:
 
                 ### جدول تحليل المفردات الامتحانية
-                | المفردة | الهدف التعليمي | هدف التقويم (A01,A02) | الدرجة | نوع الملاحظة | الملاحظة | التعديل |
+                | المفردة | الهدف التعليمي | هدف التقويم (AO1,AO2) | الدرجة | نوع الملاحظة | الملاحظة | التعديل |
                 |---|---|---|---|---|---|---|
 
                 ### الجدول العامل للاختبار القصير
-                | البند | العدد / الدرجات – نعم / لا | مطابق / غير مطابق |
+                | البند | العدد / الدرجات | مطابق / غير مطابق |
                 |---|---|---|
                 | عدد المفردات | | |
-                | عدد الدروس | (استنتجه من مطابقة الاختبار بكتاب الطالب صفحات {pg_range}) | |
-                | درجات أهداف التقويم (A01,A02) | | |
+                | عدد الدروس | (قارن الاختبار بصفحات الكتاب: {pg_range}) | |
+                | درجات أهداف التقويم (AO1,AO2) | (اجمع درجات كل هدف بشكل منفصل) | |
                 | هل توجد مفردة طويلة الإجابة؟ | | |
-                | هل صياغة المفردات والرسوم واضحة؟ | | |
+                | جودة الصياغة والرسوم | | |
 
                 ### التقدير العام للاختبار القصير
-                (اكتب هنا مستوى الاختبار بشكل عام ونسبة مطابقته للمعايير بدون إطالة).
+                (اكتب تقييماً مختصراً ونسبة المطابقة النهائية).
 
-                البيانات:
-                الاختبار: {test_data}
-                الكتاب: {book_data[:6000]}
+                المحتوى:
+                الاختبار: {test_text}
+                الكتاب: {book_text[:6000]}
                 """
                 
-                res = model.generate_content(prompt)
-                st.session_state.report = res.text
+                response = model.generate_content(prompt)
+                st.session_state.report_out = response.text
 
-        if "report" in st.session_state:
-            st.markdown(st.session_state.report)
-            st.download_button("📥 تحميل التقرير الرسمي", st.session_state.report, "Official_Oman_Report.txt")
+        if "report_out" in st.session_state:
+            st.markdown(st.session_state.report_out)
+            st.download_button("📥 تحميل التقرير الرسمي", st.session_state.report_out, "Oman_Audit_Report.txt")
 
     except Exception as e:
-        st.error(f"خطأ في الاتصال: تأكد من مفتاح API ومن تحديث المكتبات. التفاصيل: {e}")
+        st.error(f"خطأ تقني: {e}")
