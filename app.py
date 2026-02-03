@@ -136,4 +136,249 @@ def _extract_json(text: str):
         raise ValueError("رد فارغ من النموذج")
     cleaned = text.strip()
     cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
-    cleaned = re.sub(r"\s*```$", ""*
+    cleaned = re.sub(r"\s*```$", "", cleaned)
+
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError("لم يتم العثور على JSON صالح في رد النموذج")
+
+    payload = cleaned[start:end + 1]
+    return json.loads(payload)
+
+def _rtl_paragraph(paragraph):
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+
+def _rtl_cell(cell):
+    for p in cell.paragraphs:
+        _rtl_paragraph(p)
+
+def build_report_docx(data: dict, exam_label: str) -> bytes:
+    """
+    يبني ملف Word بنفس العناوين والجداول في نموذجك.
+    """
+    doc = Document()
+
+    # العنوان
+    title = f"نموذج تقرير تطبيق الذكاء الاصطناعي لتحليل الاختبارات {exam_label}"
+    p = doc.add_paragraph(title)
+    _rtl_paragraph(p)
+
+    doc.add_paragraph("")  # سطر فارغ
+
+    # جدول تحليل المفردات الامتحانية
+    p = doc.add_paragraph("جدول تحليل المفردات الامتحانية")
+    _rtl_paragraph(p)
+
+    headers = [
+        "المفردة",
+        "الهدف التعليمي",
+        "هدف التقويم (A01,A02)",
+        "الدرجة",
+        "نوع الملاحظة (صياغة، علمية، فنية تشمل الرسم)",
+        "الملاحظة",
+        "التعديل",
+    ]
+
+    items = data.get("items", []) or []
+    rows_needed = max(1, len(items)) + 1  # + header
+
+    t1 = doc.add_table(rows=rows_needed, cols=len(headers))
+    t1.style = "Table Grid"
+    t1.alignment = WD_TABLE_ALIGNMENT.RIGHT
+
+    # header row
+    for j, h in enumerate(headers):
+        t1.cell(0, j).text = h
+        _rtl_cell(t1.cell(0, j))
+
+    # data rows
+    for i, item in enumerate(items, start=1):
+        t1.cell(i, 0).text = str(item.get("mufrada", "")).strip()
+        t1.cell(i, 1).text = str(item.get("learning_objective", "")).strip()
+        t1.cell(i, 2).text = str(item.get("assessment_objective", "")).strip()
+        t1.cell(i, 3).text = str(item.get("marks", "")).strip()
+        t1.cell(i, 4).text = str(item.get("note_type", "")).strip()
+        t1.cell(i, 5).text = str(item.get("note", "")).strip()
+        t1.cell(i, 6).text = str(item.get("edit", "")).strip()
+        for j in range(len(headers)):
+            _rtl_cell(t1.cell(i, j))
+
+    doc.add_paragraph("")  # سطر فارغ
+
+    # الجدول العامل
+    p = doc.add_paragraph(f"الجدول العامل للاختبار {exam_label}")
+    _rtl_paragraph(p)
+
+    wt = data.get("working_table", {}) or {}
+
+    rows_order = [
+        "عدد المفردات",
+        "عدد الدروس",
+        "درجات أهداف التقويم (A01,A02)",
+        "هل توجد مفردة طويلة الإجابة؟",
+        "هل توجد مفردتان اختيار من متعدد؟",
+        "هل مفردات الاختيار من متعدد تحتوي على (إجابات خاطئة) مشتتات منطقية؟",
+        "هل صياغة المفردات وحجم ونوع الخط واضح للقراءة؟",
+        "هل الأشكال والرسومات واضحة؟",
+    ]
+
+    t2 = doc.add_table(rows=1 + len(rows_order), cols=3)
+    t2.style = "Table Grid"
+    t2.alignment = WD_TABLE_ALIGNMENT.RIGHT
+
+    # header
+    t2.cell(0, 0).text = "البند"
+    t2.cell(0, 1).text = "العدد / الدرجات – نعم / لا"
+    t2.cell(0, 2).text = "مطابق / غير مطابق"
+    for j in range(3):
+        _rtl_cell(t2.cell(0, j))
+
+    for i, row_label in enumerate(rows_order, start=1):
+        t2.cell(i, 0).text = row_label
+        entry = wt.get(row_label, {}) or {}
+        t2.cell(i, 1).text = str(entry.get("value", "")).strip()
+        t2.cell(i, 2).text = str(entry.get("status", "")).strip()
+        for j in range(3):
+            _rtl_cell(t2.cell(i, j))
+
+    # التقدير العام
+    p = doc.add_paragraph(f"التقدير العام للاختبار {exam_label}")
+    _rtl_paragraph(p)
+
+    overall = data.get("overall", {}) or {}
+    summary = str(overall.get("summary", "")).strip()
+    percent = overall.get("percent_match", "")
+
+    text = summary
+    if percent != "" and percent is not None:
+        text = f"{summary}\nنسبة المطابقة للمعايير: {percent}%"
+    p = doc.add_paragraph(text.strip())
+    _rtl_paragraph(p)
+
+    bio = BytesIO()
+    doc.save(bio)
+    return bio.getvalue()
+
+
+# =========================
+# التنفيذ
+# =========================
+def exam_label_ar(exam_type_value: str) -> str:
+    if exam_type_value == "قصير":
+        return "القصيرة"
+    if exam_type_value == "استقصائي":
+        return "الاستقصائية"
+    return "النهائية"
+
+run = st.button("🚀 بدء التحليل الشامل")
+
+if run:
+    if not api_key:
+        st.error("الرجاء إدخال مفتاح API أولًا.")
+        st.stop()
+
+    if not file_test or not file_policy or not file_book:
+        st.error("الرجاء رفع الملفات الثلاثة: الاختبار + وثيقة التقويم + كتاب الطالب.")
+        st.stop()
+
+    try:
+        genai.configure(api_key=api_key)
+
+        # اختيار موديل متاح بدل اسم ثابت قد يسبب 404
+        model, model_name = pick_model()
+        st.sidebar.success(f"✅ النموذج المختار: {model_name}")
+
+        pr = _parse_page_range(pages_range)
+
+        with st.spinner("جاري قراءة الملفات وتحليل الاختبار..."):
+            txt_test = extract_text_from_pdf(file_test.getvalue(), pr)
+            txt_policy = extract_text_from_pdf(file_policy.getvalue(), pr)
+            txt_book = extract_text_from_pdf(file_book.getvalue(), pr)
+
+            # تقليص النصوص لتفادي تجاوز الحدود
+            txt_test = safe_clip(txt_test, 120000)
+            txt_policy = safe_clip(txt_policy, 120000)
+            txt_book = safe_clip(txt_book, 120000)
+
+            exam_label = exam_label_ar(exam_type)
+
+            prompt = f"""
+أنت خبير تقويم وتحليل اختبارات وفق معايير سلطنة عمان.
+المطلوب: توليد تقرير مطابق لنموذج Word التالي: (عنوان + جدول تحليل المفردات الامتحانية + الجدول العامل + التقدير العام).
+
+القيود الصارمة:
+1) أخرج JSON فقط بدون أي شرح أو Markdown أو نص إضافي.
+2) المطابقة واحد لواحد: لكل مفردة/سؤال اختر بند/معيار واحد فقط من وثيقة التقويم.
+3) املأ الحقول المطلوبة بدقة وبالعربية.
+
+صيغة JSON المطلوبة (المفاتيح كما هي):
+{{
+  "items": [
+    {{
+      "mufrada": "نص المفردة/السؤال (مع رقم السؤال إن أمكن)",
+      "learning_objective": "البند/المعيار/الهدف التعليمي الأقرب (من وثيقة التقويم) بصياغته",
+      "assessment_objective": "A01 أو A02 أو A01/A02",
+      "marks": "درجة المفردة",
+      "note_type": "صياغة أو علمية أو فنية تشمل الرسم أو لا توجد",
+      "note": "الملاحظة المختصرة",
+      "edit": "التعديل المقترح المختصر"
+    }}
+  ],
+  "working_table": {{
+    "عدد المفردات": {{"value": "...", "status": "مطابق/غير مطابق"}},
+    "عدد الدروس": {{"value": "...", "status": "مطابق/غير مطابق"}},
+    "درجات أهداف التقويم (A01,A02)": {{"value": "...", "status": "مطابق/غير مطابق"}},
+    "هل توجد مفردة طويلة الإجابة؟": {{"value": "نعم/لا + إن وُجد رقم السؤال", "status": "مطابق/غير مطابق"}},
+    "هل توجد مفردتان اختيار من متعدد؟": {{"value": "نعم/لا + إن وُجد رقم السؤال", "status": "مطابق/غير مطابق"}},
+    "هل مفردات الاختيار من متعدد تحتوي على (إجابات خاطئة) مشتتات منطقية؟": {{"value": "نعم/لا + ملاحظة قصيرة", "status": "مطابق/غير مطابق"}},
+    "هل صياغة المفردات وحجم ونوع الخط واضح للقراءة؟": {{"value": "نعم/لا + ملاحظة قصيرة", "status": "مطابق/غير مطابق"}},
+    "هل الأشكال والرسومات واضحة؟": {{"value": "نعم/لا + ملاحظة قصيرة", "status": "مطابق/غير مطابق"}}
+  }},
+  "overall": {{
+    "summary": "تقدير عام مختصر جدًا (3-5 أسطر) عن مستوى الاختبار ومناسبته",
+    "percent_match": 0
+  }}
+}}
+
+البيانات:
+- نص الاختبار:
+{txt_test}
+
+- نص وثيقة التقويم (المعايير والبنود):
+{txt_policy}
+
+- نص كتاب الطالب (مرجع للدروس والموضوعات):
+{txt_book}
+"""
+
+            resp = model.generate_content(
+                prompt,
+                generation_config={
+                    "temperature": 0.2,
+                    "top_p": 0.9,
+                    "max_output_tokens": 4096,
+                },
+            )
+
+            raw = getattr(resp, "text", "") or ""
+            data = _extract_json(raw)
+
+            # بناء Word
+            docx_bytes = build_report_docx(data, exam_label)
+
+        st.markdown("---")
+        st.subheader("📋 ملخص التقدير العام:")
+        overall = (data.get("overall", {}) or {})
+        st.markdown(f'<div class="report-box">{overall.get("summary","")}</div>', unsafe_allow_html=True)
+
+        st.download_button(
+            "📥 تحميل التقرير (Word)",
+            data=docx_bytes,
+            file_name="Report.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+
+    except Exception as e:
+        st.error(f"حدث خطأ: {e}")
+        st.info("إذا ظهر 404، فغالبًا اسم الموديل تغيّر. الكود يختار موديل متاح تلقائيًا، لكن المفتاح يجب أن يكون صالحًا.")
