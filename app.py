@@ -22,7 +22,7 @@ st.markdown(
     .stApp { direction: rtl; text-align: right; }
     div[data-testid="stSidebar"] { text-align: right; direction: rtl; }
     div[data-testid="stMarkdownContainer"] { text-align: right; direction: rtl; }
-    .report-box { border: 2px solid #007bff; padding: 20px; border-radius: 10px; background-color: #f9f9f9; }
+    .report-box { border: 2px solid #007bff; padding: 16px; border-radius: 10px; background-color: #f9f9f9; }
     </style>
     """,
     unsafe_allow_html=True
@@ -65,10 +65,6 @@ def _normalize_dash(s: str) -> str:
     return re.sub(r"[–—−]", "-", (s or "").strip())
 
 def _parse_page_range(rng: str):
-    """
-    يقبل: "7-10" أو "7 – 10" أو "7 — 10"
-    يرجع: (start, end) 1-indexed أو None
-    """
     if not rng or not rng.strip():
         return None
     s = _normalize_dash(rng)
@@ -100,48 +96,42 @@ def extract_text_from_pdf(pdf_bytes: bytes, page_range_1idx=None) -> str:
     return "\n".join(parts).strip()
 
 def safe_clip(text: str, max_chars: int) -> str:
-    text = text or ""
-    return text[:max_chars]
+    return (text or "")[:max_chars]
 
 def pick_model(preferred="gemini-2.5-flash"):
-    """
-    يختار نموذجًا متاحًا تلقائيًا يدعم generateContent لتفادي 404
-    """
-    try:
-        models = [
-            m for m in genai.list_models()
-            if "generateContent" in getattr(m, "supported_generation_methods", [])
-        ]
-        names = [m.name for m in models]  # غالبًا بصيغة models/...
+    models = [
+        m for m in genai.list_models()
+        if "generateContent" in getattr(m, "supported_generation_methods", [])
+    ]
+    names = [m.name for m in models]  # models/...
 
-        pref = preferred if preferred.startswith("models/") else f"models/{preferred}"
-        if pref in names:
-            return genai.GenerativeModel(pref), pref
+    pref = preferred if preferred.startswith("models/") else f"models/{preferred}"
+    if pref in names:
+        return genai.GenerativeModel(pref), pref
 
-        for n in names:
-            if "flash" in n and "preview" not in n:
-                return genai.GenerativeModel(n), n
+    for n in names:
+        if "flash" in n and "preview" not in n:
+            return genai.GenerativeModel(n), n
 
-        return genai.GenerativeModel(names[0]), names[0]
-    except Exception:
-        # fallback ثابت (قد يعمل حسب المفتاح)
-        fallback = "models/gemini-2.5-flash"
-        return genai.GenerativeModel(fallback), fallback
+    return genai.GenerativeModel(names[0]), names[0]
 
-def _extract_json(text: str):
-    """
-    يحاول استخراج JSON حتى لو رجعه النموذج مع نص إضافي.
-    """
+def _extract_json(text: str) -> dict:
     if not text:
         raise ValueError("رد فارغ من النموذج")
+
     cleaned = text.strip()
     cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
     cleaned = re.sub(r"\s*```$", "", cleaned)
 
+    # لو كان الرد JSON صرف
+    if cleaned.startswith("{") and cleaned.endswith("}"):
+        return json.loads(cleaned)
+
+    # استخراج أكبر كتلة JSON محتملة
     start = cleaned.find("{")
     end = cleaned.rfind("}")
     if start == -1 or end == -1 or end <= start:
-        raise ValueError("لم يتم العثور على JSON صالح في رد النموذج")
+        raise ValueError("لم يتم العثور على JSON صالح داخل الرد")
 
     payload = cleaned[start:end + 1]
     return json.loads(payload)
@@ -153,18 +143,20 @@ def _rtl_cell(cell):
     for p in cell.paragraphs:
         _rtl_paragraph(p)
 
+def exam_label_ar(exam_type_value: str) -> str:
+    if exam_type_value == "قصير":
+        return "القصيرة"
+    if exam_type_value == "استقصائي":
+        return "الاستقصائية"
+    return "النهائية"
+
 def build_report_docx(data: dict, exam_label: str) -> bytes:
-    """
-    يبني ملف Word بنفس العناوين والجداول في نموذجك.
-    """
     doc = Document()
 
-    # العنوان
     title = f"نموذج تقرير تطبيق الذكاء الاصطناعي لتحليل الاختبارات {exam_label}"
     p = doc.add_paragraph(title)
     _rtl_paragraph(p)
-
-    doc.add_paragraph("")  # سطر فارغ
+    doc.add_paragraph("")
 
     # جدول تحليل المفردات الامتحانية
     p = doc.add_paragraph("جدول تحليل المفردات الامتحانية")
@@ -181,18 +173,16 @@ def build_report_docx(data: dict, exam_label: str) -> bytes:
     ]
 
     items = data.get("items", []) or []
-    rows_needed = max(1, len(items)) + 1  # + header
+    rows_needed = max(1, len(items)) + 1
 
     t1 = doc.add_table(rows=rows_needed, cols=len(headers))
     t1.style = "Table Grid"
     t1.alignment = WD_TABLE_ALIGNMENT.RIGHT
 
-    # header row
     for j, h in enumerate(headers):
         t1.cell(0, j).text = h
         _rtl_cell(t1.cell(0, j))
 
-    # data rows
     for i, item in enumerate(items, start=1):
         t1.cell(i, 0).text = str(item.get("mufrada", "")).strip()
         t1.cell(i, 1).text = str(item.get("learning_objective", "")).strip()
@@ -204,7 +194,7 @@ def build_report_docx(data: dict, exam_label: str) -> bytes:
         for j in range(len(headers)):
             _rtl_cell(t1.cell(i, j))
 
-    doc.add_paragraph("")  # سطر فارغ
+    doc.add_paragraph("")
 
     # الجدول العامل
     p = doc.add_paragraph(f"الجدول العامل للاختبار {exam_label}")
@@ -227,7 +217,6 @@ def build_report_docx(data: dict, exam_label: str) -> bytes:
     t2.style = "Table Grid"
     t2.alignment = WD_TABLE_ALIGNMENT.RIGHT
 
-    # header
     t2.cell(0, 0).text = "البند"
     t2.cell(0, 1).text = "العدد / الدرجات – نعم / لا"
     t2.cell(0, 2).text = "مطابق / غير مطابق"
@@ -261,16 +250,59 @@ def build_report_docx(data: dict, exam_label: str) -> bytes:
     return bio.getvalue()
 
 
+def generate_valid_json(model, prompt: str, tries: int = 2):
+    """
+    يحاول توليد JSON صالح. إذا فشل، يطلب من النموذج إعادة إخراج JSON صحيح.
+    """
+    last_raw = ""
+    last_err = ""
+
+    base_cfg = {
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "max_output_tokens": 8192,
+    }
+
+    for attempt in range(1, tries + 1):
+        cfg = dict(base_cfg)
+
+        # محاولة إجبار JSON إن كانت مدعومة
+        if attempt == 1:
+            cfg["response_mime_type"] = "application/json"
+
+        try:
+            resp = model.generate_content(prompt, generation_config=cfg)
+        except TypeError:
+            # إذا لم تدعم المكتبة response_mime_type
+            cfg.pop("response_mime_type", None)
+            resp = model.generate_content(prompt, generation_config=cfg)
+
+        last_raw = getattr(resp, "text", "") or ""
+
+        try:
+            return _extract_json(last_raw), last_raw
+        except Exception as e:
+            last_err = str(e)
+
+            # إعادة الطلب بصياغة إصلاح
+            prompt = f"""
+الرد التالي ليس JSON صالح وسبب الخطأ: {last_err}
+
+أعد إخراج JSON فقط (بدون أي نص إضافي) مطابقًا تمامًا للمفاتيح المطلوبة.
+- استخدم علامات اقتباس مزدوجة فقط "
+- استخدم الفاصلة الإنجليزية , بين الحقول
+- لا تكتب تعليقات ولا Markdown
+
+هذا هو الرد السابق لإصلاحه:
+{last_raw}
+"""
+
+    raise ValueError(f"فشل توليد JSON صالح بعد {tries} محاولات. آخر خطأ: {last_err}")
+
+
 # =========================
 # التنفيذ
 # =========================
-def exam_label_ar(exam_type_value: str) -> str:
-    if exam_type_value == "قصير":
-        return "القصيرة"
-    if exam_type_value == "استقصائي":
-        return "الاستقصائية"
-    return "النهائية"
-
 run = st.button("🚀 بدء التحليل الشامل")
 
 if run:
@@ -284,35 +316,29 @@ if run:
 
     try:
         genai.configure(api_key=api_key)
-
-        # اختيار موديل متاح بدل اسم ثابت قد يسبب 404
         model, model_name = pick_model()
         st.sidebar.success(f"✅ النموذج المختار: {model_name}")
 
         pr = _parse_page_range(pages_range)
+        exam_label = exam_label_ar(exam_type)
 
         with st.spinner("جاري قراءة الملفات وتحليل الاختبار..."):
-            txt_test = extract_text_from_pdf(file_test.getvalue(), pr)
-            txt_policy = extract_text_from_pdf(file_policy.getvalue(), pr)
-            txt_book = extract_text_from_pdf(file_book.getvalue(), pr)
-
-            # تقليص النصوص لتفادي تجاوز الحدود
-            txt_test = safe_clip(txt_test, 120000)
-            txt_policy = safe_clip(txt_policy, 120000)
-            txt_book = safe_clip(txt_book, 120000)
-
-            exam_label = exam_label_ar(exam_type)
+            txt_test = safe_clip(extract_text_from_pdf(file_test.getvalue(), pr), 100000)
+            txt_policy = safe_clip(extract_text_from_pdf(file_policy.getvalue(), pr), 100000)
+            txt_book = safe_clip(extract_text_from_pdf(file_book.getvalue(), pr), 100000)
 
             prompt = f"""
 أنت خبير تقويم وتحليل اختبارات وفق معايير سلطنة عمان.
-المطلوب: توليد تقرير مطابق لنموذج Word التالي: (عنوان + جدول تحليل المفردات الامتحانية + الجدول العامل + التقدير العام).
+المطلوب: إخراج JSON فقط (بدون أي شرح/Markdown).
 
-القيود الصارمة:
-1) أخرج JSON فقط بدون أي شرح أو Markdown أو نص إضافي.
-2) المطابقة واحد لواحد: لكل مفردة/سؤال اختر بند/معيار واحد فقط من وثيقة التقويم.
-3) املأ الحقول المطلوبة بدقة وبالعربية.
+قواعد صارمة:
+- JSON واحد فقط يبدأ بـ {{ وينتهي بـ }}
+- استخدم علامات اقتباس مزدوجة " فقط
+- استخدم الفاصلة الإنجليزية , فقط
+- لا تترك أي حقل بدون قيمة (ضع "-" عند عدم وجود شيء)
+- المطابقة واحد لواحد: لكل مفردة اختر هدف/بند واحد فقط من وثيقة التقويم
 
-صيغة JSON المطلوبة (المفاتيح كما هي):
+صيغة JSON المطلوبة:
 {{
   "items": [
     {{
@@ -342,35 +368,28 @@ if run:
 }}
 
 البيانات:
-- نص الاختبار:
+- المادة: {subject}
+- الصف: {grade}
+- الفصل: {semester}
+- نوع الاختبار: {exam_type}
+
+نص الاختبار:
 {txt_test}
 
-- نص وثيقة التقويم (المعايير والبنود):
+نص وثيقة التقويم:
 {txt_policy}
 
-- نص كتاب الطالب (مرجع للدروس والموضوعات):
+نص كتاب الطالب:
 {txt_book}
 """
 
-            resp = model.generate_content(
-                prompt,
-                generation_config={
-                    "temperature": 0.2,
-                    "top_p": 0.9,
-                    "max_output_tokens": 4096,
-                },
-            )
-
-            raw = getattr(resp, "text", "") or ""
-            data = _extract_json(raw)
-
-            # بناء Word
+            data, raw = generate_valid_json(model, prompt, tries=2)
             docx_bytes = build_report_docx(data, exam_label)
 
         st.markdown("---")
         st.subheader("📋 ملخص التقدير العام:")
         overall = (data.get("overall", {}) or {})
-        st.markdown(f'<div class="report-box">{overall.get("summary","")}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="report-box">{overall.get("summary","-")}</div>', unsafe_allow_html=True)
 
         st.download_button(
             "📥 تحميل التقرير (Word)",
@@ -379,6 +398,9 @@ if run:
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         )
 
+        with st.expander("عرض الناتج الخام من Gemini (للتشخيص عند الحاجة)"):
+            st.text(raw)
+
     except Exception as e:
         st.error(f"حدث خطأ: {e}")
-        st.info("إذا ظهر 404، فغالبًا اسم الموديل تغيّر. الكود يختار موديل متاح تلقائيًا، لكن المفتاح يجب أن يكون صالحًا.")
+        st.info("إذا تكرر الخطأ: قلّل نطاق الصفحات أو جرّب مرة أخرى لأن المشكلة غالبًا من JSON غير مكتمل/غير صحيح.")
