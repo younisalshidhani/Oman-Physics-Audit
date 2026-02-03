@@ -11,6 +11,11 @@ from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
 
+try:
+    from PIL import Image
+except Exception:
+    Image = None
+
 
 # =========================
 # واجهة
@@ -44,15 +49,10 @@ st.caption("يرفع: الاختبار + وثيقة التقويم + كتاب ا
 st.sidebar.header("⚙️ إعدادات التدقيق")
 api_key = st.sidebar.text_input("مفتاح API (Gemini):", type="password")
 
-subject = st.sidebar.selectbox("المادة:", ["فيزياء", "كيمياء", "أحياء"], index=0)
+subject = st.sidebar.selectbox("المادة:", ["فيزياء", "كيمياء", "أحياء", "علوم"], index=0)
 semester = st.sidebar.selectbox("الفصل الدراسي:", ["الأول", "الثاني"], index=1)
-
-# فقط 11 و 12
 grade = st.sidebar.selectbox("الصف:", ["11", "12"], index=1)
-
-# فقط قصير/استقصائي
 exam_type = st.sidebar.selectbox("نوع الاختبار:", ["قصير", "استقصائي"], index=0)
-
 pages_range = st.sidebar.text_input("نطاق الصفحات (مثال 77-97):", value="")
 
 
@@ -84,11 +84,11 @@ A02_DEFINITION = """
 """
 
 st.sidebar.markdown(
-    f"""
+    """
 <div class="muted">
-<b>تعريف رسمي لأهداف التقويم (من وثيقة التقويم):</b><br><br>
-<b>A01:</b> المعرفة والفهم (تذكر/فهم/توضيح بسيط + عمليات خطوة واحدة/تعويض بسيط).<br>
-<b>A02:</b> التطبيق والتحليل والتقييم (سياقات غير مألوفة + تحليل بيانات/رسوم/استنتاج + عمليات متعددة الخطوات).<br>
+<b>تعريف رسمي لأهداف التقويم:</b><br>
+<b>A01</b>: معرفة وفهم + توضيح مبسط + (خطوة واحدة/تعويض بسيط/معالجة بسيطة).<br>
+<b>A02</b>: تطبيق/تحليل/تقييم + سياقات غير مألوفة + بيانات/رسوم/استنتاج + (متعددة الخطوات).<br>
 </div>
 """,
     unsafe_allow_html=True
@@ -128,7 +128,7 @@ def _parse_page_range(rng: str):
     return (a, b)
 
 @st.cache_data(show_spinner=False)
-def extract_text_from_pdf(pdf_bytes: bytes, page_range_1idx=None) -> str:
+def extract_text_from_pdf_textonly(pdf_bytes: bytes, page_range_1idx=None) -> str:
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     start0, end0 = 0, doc.page_count - 1
     if page_range_1idx:
@@ -204,6 +204,67 @@ def pick_model(preferred="gemini-2.5-flash"):
 
 
 # =========================
+# OCR عبر Gemini (عند فشل استخراج النص من PDF)
+# =========================
+def _page_indices(doc, page_range_1idx):
+    start0, end0 = 0, doc.page_count - 1
+    if page_range_1idx:
+        a, b = page_range_1idx
+        start0 = max(0, a - 1)
+        end0 = min(doc.page_count - 1, b - 1)
+    return list(range(start0, end0 + 1))
+
+def ocr_pdf_with_gemini(model, pdf_bytes: bytes, page_range_1idx=None, max_pages: int = 12) -> str:
+    if Image is None:
+        raise RuntimeError("Pillow غير متوفر. أضف pillow إلى requirements.txt")
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    pages = _page_indices(doc, page_range_1idx)
+    if len(pages) > max_pages:
+        pages = pages[:max_pages]
+
+    out_parts = []
+    ocr_prompt = (
+        "استخرج النص الظاهر في الصورة بدقة عالية (عربي/إنجليزي/أرقام/رموز). "
+        "اكتب النص فقط كما هو دون إعادة صياغة. "
+        "حافظ على ترتيب السطور. "
+        "لا تضف أي كلمات غير موجودة."
+    )
+
+    for pno in pages:
+        page = doc.load_page(pno)
+        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        png_bytes = pix.tobytes("png")
+        img = Image.open(BytesIO(png_bytes))
+
+        resp = model.generate_content(
+            [ocr_prompt, img],
+            generation_config={"temperature": 0.0, "top_p": 1.0, "max_output_tokens": 2048},
+        )
+        txt = (getattr(resp, "text", "") or "").strip()
+        if txt:
+            out_parts.append(txt)
+
+    doc.close()
+    return "\n\n".join(out_parts).strip()
+
+def extract_text_auto(model, pdf_bytes: bytes, page_range_1idx=None, max_pages_ocr: int = 12) -> Tuple[str, str]:
+    """
+    يرجع (text, mode) حيث mode إما 'text' أو 'ocr'
+    """
+    txt = extract_text_from_pdf_textonly(pdf_bytes, page_range_1idx)
+    compact = re.sub(r"\s+", "", txt or "")
+    if len(compact) >= 200:
+        return txt, "text"
+
+    # OCR عند فشل النص
+    txt_ocr = ocr_pdf_with_gemini(model, pdf_bytes, page_range_1idx, max_pages=max_pages_ocr)
+    if txt_ocr.strip():
+        return txt_ocr, "ocr"
+
+    return txt, "text"
+
+
+# =========================
 # استرجاع سياق من وثيقة التقويم/الكتاب (تقليل الهلوسة)
 # =========================
 _ARABIC_DIACRITICS = re.compile(r"[\u064B-\u065F\u0670\u06D6-\u06ED]")
@@ -251,7 +312,7 @@ A02_TRIGGERS = [
     "استنتج", "حلل", "قارن", "علل", "فسر", "برر", "ناقش", "اثبت", "برهن",
     "من الرسم", "من الجدول", "ارسم", "مثل بيانيا", "منحنى", "رسم بياني", "مخطط", "بيانات",
     "تجربة", "تحقيق", "استقصاء", "صمم", "اقترح", "توقع", "استخلص", "فسر النتائج",
-    "خطوتين", "خطوات", "متعددة", "تقييم", "قيمة غير مألوفة", "سياق غير مألوف"
+    "متعددة", "خطوات", "تقييم", "سياق غير مألوف"
 ]
 A01_TRIGGERS = [
     "عرف", "اذكر", "عدد", "سم", "ما المقصود", "ما هو", "حدد", "صف", "وضح", "اكتب", "بين معنى",
@@ -269,8 +330,8 @@ def heuristic_assessment_objective(item_text: str) -> str:
         if norm_ar(w) in t:
             return "A01"
 
-    # مؤشرات حسابية: ليست وحدها كافية (قد تكون A01 إذا خطوة واحدة/تعويض بسيط)
-    if re.search(r"\b(من الرسم|من الجدول|بيانات|منحنى|مخطط)\b", item_text):
+    # بيانات/رسوم غالبًا A02
+    if re.search(r"(من الرسم|من الجدول|بيانات|منحنى|مخطط)", item_text):
         return "A02"
 
     # افتراضي محافظ
@@ -393,7 +454,7 @@ def analyze_one_item(model, item: Dict, policy_text: str, book_text: str) -> Dic
 
 قواعد إخراج صارمة:
 - JSON فقط دون أي نص إضافي.
-- لا تضع علامة الاقتباس المزدوجة " داخل القيم (استبدلها بـ ' إن احتجت).
+- لا تضع " داخل القيم (استبدلها بـ ' إن احتجت).
 - اجعل القيم قصيرة وواضحة.
 - learning_objective: اختر عبارة/بند من وثيقة التقويم "كما هو" قدر الإمكان من المقاطع المرفقة، ولا تختر من خارجها إلا عند الضرورة (وعندها ضع '-').
 
@@ -420,19 +481,15 @@ def analyze_one_item(model, item: Dict, policy_text: str, book_text: str) -> Dic
 """
     out, raw = generate_json(model, prompt, tries=3)
 
-    # ضمان رقم المفردة فقط
-    out["mufrada"] = item_no
+    out["mufrada"] = item_no  # رقم المفردة فقط
 
-    # تطبيع AO
-    ao = str(out.get("assessment_objective", "")).strip()
     allowed = {"A01", "A02", "A01/A02"}
+    ao = str(out.get("assessment_objective", "")).strip()
     if ao not in allowed:
         out["assessment_objective"] = ao_hint
 
-    # مراجعة عند تعارض واضح: إذا قال A01 بينما المؤشرات/السياق يوحي A02 (رسوم/جداول/تحليل/استنتاج)
-    ao_final = str(out.get("assessment_objective", "")).strip()
-    strong_a02 = bool(re.search(r"(من الرسم|من الجدول|بيانات|منحنى|مخطط|استنتج|حلل|علل|فسر النتائج)", item_text))
-    if strong_a02 and ao_final == "A01":
+    strong_a02 = bool(re.search(r"(من الرسم|من الجدول|بيانات|منحنى|مخطط|استنتج|حلل|علل|فسر النتائج|ارسم|مثل بيانيا)", item_text))
+    if strong_a02 and str(out.get("assessment_objective", "")).strip() == "A01":
         fix_prompt = f"""
 راجع تصنيف هدف التقويم فقط وفق التعريف الرسمي.
 أخرج JSON فقط: {{"assessment_objective":"A01/A02","ao_reason":"..."}}
@@ -457,7 +514,6 @@ def analyze_one_item(model, item: Dict, policy_text: str, book_text: str) -> Dic
         except Exception:
             pass
 
-    # حفظ نص المفردة داخليًا (للexpander فقط)
     out["_item_text"] = item_text
     out["_raw"] = raw
     return out
@@ -507,7 +563,7 @@ def build_working_table(items: List[Dict]) -> Dict:
 
 
 # =========================
-# Word (يبقى موجود)
+# Word
 # =========================
 def _rtl_paragraph(paragraph):
     paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -649,16 +705,20 @@ if run:
         pr = _parse_page_range(pages_range)
         exam_label = exam_label_ar(exam_type)
 
-        with st.spinner("جاري قراءة الملفات..."):
-            txt_test = safe_clip(extract_text_from_pdf(file_test.getvalue(), pr), 80000)
-            txt_policy = safe_clip(extract_text_from_pdf(file_policy.getvalue(), pr), 130000)
-            txt_book = safe_clip(extract_text_from_pdf(file_book.getvalue(), pr), 100000)
+        with st.spinner("جاري قراءة الملفات (مع OCR تلقائيًا عند الحاجة)..."):
+            txt_test, mode_test = extract_text_auto(model, file_test.getvalue(), pr, max_pages_ocr=12)
+            txt_policy, mode_policy = extract_text_auto(model, file_policy.getvalue(), pr, max_pages_ocr=12)
+            txt_book, mode_book = extract_text_auto(model, file_book.getvalue(), pr, max_pages_ocr=12)
 
-        with st.spinner("جاري استخراج مفردات الاختبار بدقة..."):
+            txt_test = safe_clip(txt_test, 80000)
+            txt_policy = safe_clip(txt_policy, 130000)
+            txt_book = safe_clip(txt_book, 100000)
+
+        with st.spinner("جاري استخراج مفردات الاختبار..."):
             items_base = extract_items_via_llm(model, txt_test)
 
         if not items_base:
-            st.error("لم أستطع استخراج مفردات من ملف الاختبار. جرّب تضييق نطاق الصفحات أو تأكد من وضوح نص PDF.")
+            st.error("لم أستطع استخراج مفردات من ملف الاختبار. جرّب تضييق نطاق الصفحات.")
             st.stop()
 
         analyzed_items = []
@@ -673,14 +733,9 @@ if run:
         percent_match = compute_percent_match(analyzed_items)
         working_table = build_working_table(analyzed_items)
 
-        # تقدير عام (مختصر) يعتمد على توزيع A01/A02 + ملاحظات الصياغة/العلمية
         compact = [
-            {
-                "mufrada": x.get("mufrada"),
-                "assessment_objective": x.get("assessment_objective"),
-                "note_type": x.get("note_type"),
-                "note": x.get("note"),
-            }
+            {"mufrada": x.get("mufrada"), "assessment_objective": x.get("assessment_objective"),
+             "note_type": x.get("note_type"), "note": x.get("note")}
             for x in analyzed_items
         ]
 
@@ -704,9 +759,6 @@ if run:
             "overall": {"summary": overall_summary, "percent_match": percent_match},
         }
 
-        # =========================
-        # العرض داخل الصفحة (مطابق للجداول)
-        # =========================
         st.markdown("---")
         st.subheader("جدول تحليل المفردات الامتحانية")
 
@@ -723,7 +775,7 @@ if run:
         rows1 = []
         for it in analyzed_items:
             rows1.append([
-                str(it.get("mufrada", "-")).strip(),  # رقم المفردة فقط
+                str(it.get("mufrada", "-")).strip(),
                 str(it.get("learning_objective", "-")).strip(),
                 str(it.get("assessment_objective", "-")).strip(),
                 str(it.get("marks", "-")).strip(),
@@ -762,7 +814,6 @@ if run:
             unsafe_allow_html=True
         )
 
-        # عرض نصوص المفردات خارج الجدول (للمراجعة)
         with st.expander("عرض نص كل مفردة + سبب تصنيف A01/A02 (للمراجعة)"):
             for it in analyzed_items:
                 st.markdown(f"**المفردة {it.get('mufrada')}**")
@@ -770,7 +821,6 @@ if run:
                 st.markdown(f"<div class='muted'>سبب التصنيف: {it.get('ao_reason','-')}</div>", unsafe_allow_html=True)
                 st.markdown("---")
 
-        # تنزيل Word
         docx_bytes = build_report_docx(report_data, exam_label)
         st.download_button(
             "📥 تنزيل التقرير (Word)",
@@ -781,4 +831,3 @@ if run:
 
     except Exception as e:
         st.error(f"حدث خطأ: {e}")
-        st.info("إذا ظهرت أخطاء تحليل كثيرة: جرّب تضييق نطاق الصفحات لأن جودة نص PDF العربي تؤثر مباشرة على دقة التصنيف.")
