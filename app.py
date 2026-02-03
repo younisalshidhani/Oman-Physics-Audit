@@ -57,7 +57,7 @@ pages_range = st.sidebar.text_input("نطاق الصفحات (مثال 77-97):",
 
 
 # =========================
-# تعريفات أهداف التقويم الرسمية (حسب وثيقة التقويم)
+# تعريفات أهداف التقويم الرسمية
 # =========================
 A01_DEFINITION = """
 هدف التقويم الأول (A01): المعرفة والفهم.
@@ -82,17 +82,6 @@ A02_DEFINITION = """
 شرح الأحداث والظواهر والأنماط والعلاقات تفسيرًا سببيًا، استخدام المخططات/النماذج لإثبات المفهوم،
 حساب ومعالجة البيانات العددية (خصوصًا متعددة الخطوات)، حل المشكلات.
 """
-
-st.sidebar.markdown(
-    """
-<div class="muted">
-<b>تعريف رسمي لأهداف التقويم:</b><br>
-<b>A01</b>: معرفة وفهم + توضيح مبسط + (خطوة واحدة/تعويض بسيط/معالجة بسيطة).<br>
-<b>A02</b>: تطبيق/تحليل/تقييم + سياقات غير مألوفة + بيانات/رسوم/استنتاج + (متعددة الخطوات).<br>
-</div>
-""",
-    unsafe_allow_html=True
-)
 
 
 # =========================
@@ -204,7 +193,7 @@ def pick_model(preferred="gemini-2.5-flash"):
 
 
 # =========================
-# OCR عبر Gemini (عند فشل استخراج النص من PDF)
+# OCR عبر Gemini (عند فشل استخراج النص أو كان النص "غير مفيد")
 # =========================
 def _page_indices(doc, page_range_1idx):
     start0, end0 = 0, doc.page_count - 1
@@ -214,11 +203,38 @@ def _page_indices(doc, page_range_1idx):
         end0 = min(doc.page_count - 1, b - 1)
     return list(range(start0, end0 + 1))
 
-def ocr_pdf_with_gemini(model, pdf_bytes: bytes, page_range_1idx=None, max_pages: int = 12) -> str:
+def _is_text_meaningful(txt: str) -> bool:
+    """
+    أحيانًا PDF يعطي نصًا "فارغ المعنى" (عناوين/رموز) رغم أن الأسئلة صور.
+    نقرر هل النص كافٍ للاستخراج أم يجب OCR.
+    """
+    if not txt:
+        return False
+    t = strip_control_chars(txt)
+    if len(t.strip()) < 300:
+        return False
+
+    # عدد أحرف عربية + أرقام
+    ar = len(re.findall(r"[\u0600-\u06FF]", t))
+    dg = len(re.findall(r"\d", t))
+
+    # إذا قليل جدًا = غير مفيد
+    if ar < 120 and dg < 30:
+        return False
+
+    # إذا لا يوجد أي مؤشر لسؤال (؟) أو ترقيم أو كلمة "سؤال" عادةً = مشبوه
+    has_qmark = "؟" in t or "?" in t
+    has_numbering = bool(re.search(r"(^|\n)\s*\d+\s*[-.)]", t))
+    has_keyword = bool(re.search(r"(سؤال|اختر|أجب|علل|فسر|احسب|اوجد)", t))
+    return has_qmark or has_numbering or has_keyword or (ar > 300)
+
+def ocr_pdf_with_gemini(model, pdf_bytes: bytes, page_range_1idx=None, max_pages: int = 20) -> str:
     if Image is None:
         raise RuntimeError("Pillow غير متوفر. أضف pillow إلى requirements.txt")
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     pages = _page_indices(doc, page_range_1idx)
+
+    # لو النطاق كبير، لا نأخذ أكثر من max_pages (لتفادي بطء/تكلفة/حدود)
     if len(pages) > max_pages:
         pages = pages[:max_pages]
 
@@ -247,17 +263,17 @@ def ocr_pdf_with_gemini(model, pdf_bytes: bytes, page_range_1idx=None, max_pages
     doc.close()
     return "\n\n".join(out_parts).strip()
 
-def extract_text_auto(model, pdf_bytes: bytes, page_range_1idx=None, max_pages_ocr: int = 12) -> Tuple[str, str]:
+def extract_text_auto(model, pdf_bytes: bytes, page_range_1idx=None) -> Tuple[str, str]:
     """
     يرجع (text, mode) حيث mode إما 'text' أو 'ocr'
+    - يفعل OCR إذا النص ضعيف/غير مفيد حتى لو طوله كبير.
     """
     txt = extract_text_from_pdf_textonly(pdf_bytes, page_range_1idx)
-    compact = re.sub(r"\s+", "", txt or "")
-    if len(compact) >= 200:
+    if _is_text_meaningful(txt):
         return txt, "text"
 
-    # OCR عند فشل النص
-    txt_ocr = ocr_pdf_with_gemini(model, pdf_bytes, page_range_1idx, max_pages=max_pages_ocr)
+    # OCR عند فشل النص أو كان غير مفيد
+    txt_ocr = ocr_pdf_with_gemini(model, pdf_bytes, page_range_1idx, max_pages=20)
     if txt_ocr.strip():
         return txt_ocr, "ocr"
 
@@ -330,11 +346,9 @@ def heuristic_assessment_objective(item_text: str) -> str:
         if norm_ar(w) in t:
             return "A01"
 
-    # بيانات/رسوم غالبًا A02
     if re.search(r"(من الرسم|من الجدول|بيانات|منحنى|مخطط)", item_text):
         return "A02"
 
-    # افتراضي محافظ
     return "A01"
 
 
@@ -406,7 +420,7 @@ def extract_items_via_llm(model, txt_test: str) -> List[Dict]:
 }}
 
 نص الاختبار:
-{safe_clip(txt_test, 75000)}
+{safe_clip(txt_test, 90000)}
 """
     data, _ = generate_json(model, prompt, tries=3)
     items = data.get("items", []) or []
@@ -481,7 +495,7 @@ def analyze_one_item(model, item: Dict, policy_text: str, book_text: str) -> Dic
 """
     out, raw = generate_json(model, prompt, tries=3)
 
-    out["mufrada"] = item_no  # رقم المفردة فقط
+    out["mufrada"] = item_no
 
     allowed = {"A01", "A02", "A01/A02"}
     ao = str(out.get("assessment_objective", "")).strip()
@@ -672,7 +686,7 @@ def build_report_docx(data: dict, exam_label: str) -> bytes:
 
 
 # =========================
-# عرض HTML للجداول داخل الصفحة (وفق النموذج)
+# عرض HTML للجداول داخل الصفحة
 # =========================
 def render_table_html(headers: List[str], rows: List[List[str]]) -> str:
     th = "".join([f"<th>{h}</th>" for h in headers])
@@ -705,20 +719,28 @@ if run:
         pr = _parse_page_range(pages_range)
         exam_label = exam_label_ar(exam_type)
 
-        with st.spinner("جاري قراءة الملفات (مع OCR تلقائيًا عند الحاجة)..."):
-            txt_test, mode_test = extract_text_auto(model, file_test.getvalue(), pr, max_pages_ocr=12)
-            txt_policy, mode_policy = extract_text_auto(model, file_policy.getvalue(), pr, max_pages_ocr=12)
-            txt_book, mode_book = extract_text_auto(model, file_book.getvalue(), pr, max_pages_ocr=12)
+        with st.spinner("جاري قراءة الملفات (OCR تلقائيًا عند الحاجة)..."):
+            txt_test, mode_test = extract_text_auto(model, file_test.getvalue(), pr)
+            txt_policy, mode_policy = extract_text_auto(model, file_policy.getvalue(), pr)
+            txt_book, mode_book = extract_text_auto(model, file_book.getvalue(), pr)
 
-            txt_test = safe_clip(txt_test, 80000)
-            txt_policy = safe_clip(txt_policy, 130000)
-            txt_book = safe_clip(txt_book, 100000)
+            txt_test = safe_clip(txt_test, 110000)
+            txt_policy = safe_clip(txt_policy, 150000)
+            txt_book = safe_clip(txt_book, 120000)
 
         with st.spinner("جاري استخراج مفردات الاختبار..."):
             items_base = extract_items_via_llm(model, txt_test)
 
+        # === إصلاح المشكلة الأساسية: إذا فشل استخراج المفردات، نجبر OCR للاختبار ثم نعيد المحاولة ===
         if not items_base:
-            st.error("لم أستطع استخراج مفردات من ملف الاختبار. جرّب تضييق نطاق الصفحات.")
+            with st.spinner("فشل استخراج المفردات من النص. سأجرب OCR مباشر للاختبار ثم أعيد الاستخراج..."):
+                txt_test_ocr = ocr_pdf_with_gemini(model, file_test.getvalue(), pr, max_pages=25)
+                if txt_test_ocr.strip():
+                    txt_test = safe_clip(txt_test_ocr, 110000)
+                    items_base = extract_items_via_llm(model, txt_test)
+
+        if not items_base:
+            st.error("لم أستطع استخراج مفردات من ملف الاختبار حتى بعد OCR. جرّب نطاق صفحات يحتوي الأسئلة مباشرة.")
             st.stop()
 
         analyzed_items = []
