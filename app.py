@@ -36,13 +36,19 @@ st.caption("يرفع: الاختبار + وثيقة التقويم + كتاب ا
 # الشريط الجانبي
 # =========================
 st.sidebar.header("⚙️ إعدادات التدقيق")
-
 api_key = st.sidebar.text_input("مفتاح API (Gemini):", type="password")
 
-subject = st.sidebar.selectbox("المادة:", ["فيزياء", "علوم"], index=0)
+# ✅ تم إرجاع أحياء + كيمياء
+subject = st.sidebar.selectbox("المادة:", ["فيزياء", "كيمياء", "أحياء", "علوم"], index=0)
+
 semester = st.sidebar.selectbox("الفصل الدراسي:", ["الأول", "الثاني"], index=1)
-grade = st.sidebar.selectbox("الصف:", ["5", "6", "7", "8", "9", "10", "11", "12"], index=7)
-exam_type = st.sidebar.selectbox("نوع الاختبار:", ["قصير", "استقصائي", "نهائي"], index=0)
+
+# ✅ فقط الصفين 11 و 12
+grade = st.sidebar.selectbox("الصف:", ["11", "12"], index=1)
+
+# ✅ فقط قصير واستقصائي
+exam_type = st.sidebar.selectbox("نوع الاختبار:", ["قصير", "استقصائي"], index=0)
+
 pages_range = st.sidebar.text_input("نطاق الصفحات (مثال 77-97):", value="")
 
 
@@ -98,6 +104,11 @@ def extract_text_from_pdf(pdf_bytes: bytes, page_range_1idx=None) -> str:
 def safe_clip(text: str, max_chars: int) -> str:
     return (text or "")[:max_chars]
 
+def strip_control_chars(s: str) -> str:
+    if not s:
+        return ""
+    return re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", s)
+
 def pick_model(preferred="gemini-2.5-flash"):
     models = [
         m for m in genai.list_models()
@@ -115,26 +126,54 @@ def pick_model(preferred="gemini-2.5-flash"):
 
     return genai.GenerativeModel(names[0]), names[0]
 
-def _extract_json(text: str) -> dict:
-    if not text:
+def repair_json_text(s: str) -> str:
+    """
+    إصلاحات شائعة: فواصل عربية، اقتباسات ذكية، مفقودات فواصل بين الأسطر.
+    """
+    s = strip_control_chars(s).strip()
+
+    s = re.sub(r"^```(?:json)?\s*", "", s)
+    s = re.sub(r"\s*```$", "", s)
+
+    start = s.find("{")
+    end = s.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        s = s[start:end + 1]
+
+    # اقتباسات ذكية → "
+    s = s.replace("“", '"').replace("”", '"').replace("„", '"').replace("’", "'").replace("‘", "'")
+
+    # الفاصلة العربية → الإنجليزية
+    s = s.replace("،", ",")
+
+    # إزالة فاصلة زائدة قبل إغلاق } أو ]
+    s = re.sub(r",\s*([}\]])", r"\1", s)
+
+    # إدخال فاصلة مفقودة بين سطر ينتهي بقيمة وسطر يبدأ بمفتاح جديد
+    s = re.sub(r'(")\s*\n\s*(")', r'\1,\n\2', s)
+    s = re.sub(r'(\d)\s*\n\s*(")', r'\1,\n\2', s)
+    s = re.sub(r'(})\s*\n\s*(")', r'\1,\n\2', s)
+    s = re.sub(r'(])\s*\n\s*(")', r'\1,\n\2', s)
+
+    return s
+
+def parse_json_robust(raw: str) -> dict:
+    """
+    يحاول parse مباشر، ثم إصلاح، ثم parse.
+    """
+    if not raw:
         raise ValueError("رد فارغ من النموذج")
 
-    cleaned = text.strip()
-    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
-    cleaned = re.sub(r"\s*```$", "", cleaned)
+    raw = strip_control_chars(raw)
 
-    # لو كان الرد JSON صرف
-    if cleaned.startswith("{") and cleaned.endswith("}"):
-        return json.loads(cleaned)
+    # محاولة مباشرة
+    try:
+        return json.loads(raw)
+    except Exception:
+        pass
 
-    # استخراج أكبر كتلة JSON محتملة
-    start = cleaned.find("{")
-    end = cleaned.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        raise ValueError("لم يتم العثور على JSON صالح داخل الرد")
-
-    payload = cleaned[start:end + 1]
-    return json.loads(payload)
+    fixed = repair_json_text(raw)
+    return json.loads(fixed)
 
 def _rtl_paragraph(paragraph):
     paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -144,11 +183,7 @@ def _rtl_cell(cell):
         _rtl_paragraph(p)
 
 def exam_label_ar(exam_type_value: str) -> str:
-    if exam_type_value == "قصير":
-        return "القصيرة"
-    if exam_type_value == "استقصائي":
-        return "الاستقصائية"
-    return "النهائية"
+    return "القصيرة" if exam_type_value == "قصير" else "الاستقصائية"
 
 def build_report_docx(data: dict, exam_label: str) -> bytes:
     doc = Document()
@@ -184,13 +219,13 @@ def build_report_docx(data: dict, exam_label: str) -> bytes:
         _rtl_cell(t1.cell(0, j))
 
     for i, item in enumerate(items, start=1):
-        t1.cell(i, 0).text = str(item.get("mufrada", "")).strip()
-        t1.cell(i, 1).text = str(item.get("learning_objective", "")).strip()
-        t1.cell(i, 2).text = str(item.get("assessment_objective", "")).strip()
-        t1.cell(i, 3).text = str(item.get("marks", "")).strip()
-        t1.cell(i, 4).text = str(item.get("note_type", "")).strip()
-        t1.cell(i, 5).text = str(item.get("note", "")).strip()
-        t1.cell(i, 6).text = str(item.get("edit", "")).strip()
+        t1.cell(i, 0).text = str(item.get("mufrada", "-")).strip()
+        t1.cell(i, 1).text = str(item.get("learning_objective", "-")).strip()
+        t1.cell(i, 2).text = str(item.get("assessment_objective", "-")).strip()
+        t1.cell(i, 3).text = str(item.get("marks", "-")).strip()
+        t1.cell(i, 4).text = str(item.get("note_type", "-")).strip()
+        t1.cell(i, 5).text = str(item.get("note", "-")).strip()
+        t1.cell(i, 6).text = str(item.get("edit", "-")).strip()
         for j in range(len(headers)):
             _rtl_cell(t1.cell(i, j))
 
@@ -226,8 +261,8 @@ def build_report_docx(data: dict, exam_label: str) -> bytes:
     for i, row_label in enumerate(rows_order, start=1):
         t2.cell(i, 0).text = row_label
         entry = wt.get(row_label, {}) or {}
-        t2.cell(i, 1).text = str(entry.get("value", "")).strip()
-        t2.cell(i, 2).text = str(entry.get("status", "")).strip()
+        t2.cell(i, 1).text = str(entry.get("value", "-")).strip()
+        t2.cell(i, 2).text = str(entry.get("status", "-")).strip()
         for j in range(3):
             _rtl_cell(t2.cell(i, j))
 
@@ -236,7 +271,7 @@ def build_report_docx(data: dict, exam_label: str) -> bytes:
     _rtl_paragraph(p)
 
     overall = data.get("overall", {}) or {}
-    summary = str(overall.get("summary", "")).strip()
+    summary = str(overall.get("summary", "-")).strip()
     percent = overall.get("percent_match", "")
 
     text = summary
@@ -249,10 +284,9 @@ def build_report_docx(data: dict, exam_label: str) -> bytes:
     doc.save(bio)
     return bio.getvalue()
 
-
-def generate_valid_json(model, prompt: str, tries: int = 2):
+def generate_json(model, prompt: str, tries: int = 3):
     """
-    يحاول توليد JSON صالح. إذا فشل، يطلب من النموذج إعادة إخراج JSON صحيح.
+    محاولة إخراج JSON صالح مع إعادة تصحيح تلقائية عند الفشل.
     """
     last_raw = ""
     last_err = ""
@@ -265,39 +299,36 @@ def generate_valid_json(model, prompt: str, tries: int = 2):
 
     for attempt in range(1, tries + 1):
         cfg = dict(base_cfg)
-
-        # محاولة إجبار JSON إن كانت مدعومة
         if attempt == 1:
             cfg["response_mime_type"] = "application/json"
 
         try:
             resp = model.generate_content(prompt, generation_config=cfg)
         except TypeError:
-            # إذا لم تدعم المكتبة response_mime_type
             cfg.pop("response_mime_type", None)
             resp = model.generate_content(prompt, generation_config=cfg)
 
         last_raw = getattr(resp, "text", "") or ""
 
         try:
-            return _extract_json(last_raw), last_raw
+            return parse_json_robust(last_raw), last_raw
         except Exception as e:
             last_err = str(e)
-
-            # إعادة الطلب بصياغة إصلاح
+            snippet = safe_clip(last_raw, 20000)
             prompt = f"""
-الرد التالي ليس JSON صالح وسبب الخطأ: {last_err}
+أصلح JSON التالي ليصبح JSON صالح 100% (ولا تكتب أي شيء غير JSON).
+تعليمات صارمة:
+- لا تستخدم أي علامة اقتباس مزدوجة داخل القيم. إذا ظهرت " داخل قيمة استبدلها بـ '
+- لا تستخدم أسطر جديدة داخل القيم
+- استخدم الفاصلة الإنجليزية , فقط
+- لا تستخدم الفاصلة العربية ،
+- نفس المفاتيح تمامًا دون تغيير
 
-أعد إخراج JSON فقط (بدون أي نص إضافي) مطابقًا تمامًا للمفاتيح المطلوبة.
-- استخدم علامات اقتباس مزدوجة فقط "
-- استخدم الفاصلة الإنجليزية , بين الحقول
-- لا تكتب تعليقات ولا Markdown
-
-هذا هو الرد السابق لإصلاحه:
-{last_raw}
+JSON غير صالح:
+{snippet}
 """
 
-    raise ValueError(f"فشل توليد JSON صالح بعد {tries} محاولات. آخر خطأ: {last_err}")
+    raise ValueError(f"فشل توليد JSON صالح. آخر خطأ: {last_err}")
 
 
 # =========================
@@ -323,27 +354,30 @@ if run:
         exam_label = exam_label_ar(exam_type)
 
         with st.spinner("جاري قراءة الملفات وتحليل الاختبار..."):
-            txt_test = safe_clip(extract_text_from_pdf(file_test.getvalue(), pr), 100000)
-            txt_policy = safe_clip(extract_text_from_pdf(file_policy.getvalue(), pr), 100000)
-            txt_book = safe_clip(extract_text_from_pdf(file_book.getvalue(), pr), 100000)
+            # تقليل القص لتقليل احتمالية التقطيع/الـ truncation في الرد
+            txt_test = safe_clip(extract_text_from_pdf(file_test.getvalue(), pr), 50000)
+            txt_policy = safe_clip(extract_text_from_pdf(file_policy.getvalue(), pr), 60000)
+            txt_book = safe_clip(extract_text_from_pdf(file_book.getvalue(), pr), 30000)
 
             prompt = f"""
 أنت خبير تقويم وتحليل اختبارات وفق معايير سلطنة عمان.
-المطلوب: إخراج JSON فقط (بدون أي شرح/Markdown).
+المطلوب: إخراج JSON فقط دون أي نص إضافي.
 
-قواعد صارمة:
+قيود صارمة جدًا:
 - JSON واحد فقط يبدأ بـ {{ وينتهي بـ }}
-- استخدم علامات اقتباس مزدوجة " فقط
-- استخدم الفاصلة الإنجليزية , فقط
-- لا تترك أي حقل بدون قيمة (ضع "-" عند عدم وجود شيء)
-- المطابقة واحد لواحد: لكل مفردة اختر هدف/بند واحد فقط من وثيقة التقويم
+- استخدم علامات اقتباس مزدوجة " للمفاتيح فقط.
+- لا تضع " داخل القيم إطلاقًا. استبدلها بـ ' عند الحاجة.
+- لا تضع أسطر جديدة داخل القيم.
+- القيم قصيرة (بحد أقصى 120 حرفًا لكل حقل نصي).
+- المطابقة واحد لواحد: لكل مفردة اختر بند/هدف واحد فقط من وثيقة التقويم.
+- percent_match رقم صحيح من 0 إلى 100.
 
 صيغة JSON المطلوبة:
 {{
   "items": [
     {{
-      "mufrada": "نص المفردة/السؤال (مع رقم السؤال إن أمكن)",
-      "learning_objective": "البند/المعيار/الهدف التعليمي الأقرب (من وثيقة التقويم) بصياغته",
+      "mufrada": "نص المفردة/السؤال",
+      "learning_objective": "البند/المعيار الأقرب من وثيقة التقويم",
       "assessment_objective": "A01 أو A02 أو A01/A02",
       "marks": "درجة المفردة",
       "note_type": "صياغة أو علمية أو فنية تشمل الرسم أو لا توجد",
@@ -355,14 +389,14 @@ if run:
     "عدد المفردات": {{"value": "...", "status": "مطابق/غير مطابق"}},
     "عدد الدروس": {{"value": "...", "status": "مطابق/غير مطابق"}},
     "درجات أهداف التقويم (A01,A02)": {{"value": "...", "status": "مطابق/غير مطابق"}},
-    "هل توجد مفردة طويلة الإجابة؟": {{"value": "نعم/لا + إن وُجد رقم السؤال", "status": "مطابق/غير مطابق"}},
-    "هل توجد مفردتان اختيار من متعدد؟": {{"value": "نعم/لا + إن وُجد رقم السؤال", "status": "مطابق/غير مطابق"}},
-    "هل مفردات الاختيار من متعدد تحتوي على (إجابات خاطئة) مشتتات منطقية؟": {{"value": "نعم/لا + ملاحظة قصيرة", "status": "مطابق/غير مطابق"}},
-    "هل صياغة المفردات وحجم ونوع الخط واضح للقراءة؟": {{"value": "نعم/لا + ملاحظة قصيرة", "status": "مطابق/غير مطابق"}},
-    "هل الأشكال والرسومات واضحة؟": {{"value": "نعم/لا + ملاحظة قصيرة", "status": "مطابق/غير مطابق"}}
+    "هل توجد مفردة طويلة الإجابة؟": {{"value": "نعم/لا + رقم السؤال إن وجد", "status": "مطابق/غير مطابق"}},
+    "هل توجد مفردتان اختيار من متعدد؟": {{"value": "نعم/لا + رقم السؤال إن وجد", "status": "مطابق/غير مطابق"}},
+    "هل مفردات الاختيار من متعدد تحتوي على (إجابات خاطئة) مشتتات منطقية؟": {{"value": "نعم/لا + ملاحظة", "status": "مطابق/غير مطابق"}},
+    "هل صياغة المفردات وحجم ونوع الخط واضح للقراءة؟": {{"value": "نعم/لا + ملاحظة", "status": "مطابق/غير مطابق"}},
+    "هل الأشكال والرسومات واضحة؟": {{"value": "نعم/لا + ملاحظة", "status": "مطابق/غير مطابق"}}
   }},
   "overall": {{
-    "summary": "تقدير عام مختصر جدًا (3-5 أسطر) عن مستوى الاختبار ومناسبته",
+    "summary": "تقدير عام مختصر 3-5 أسطر",
     "percent_match": 0
   }}
 }}
@@ -383,7 +417,7 @@ if run:
 {txt_book}
 """
 
-            data, raw = generate_valid_json(model, prompt, tries=2)
+            data, raw = generate_json(model, prompt, tries=3)
             docx_bytes = build_report_docx(data, exam_label)
 
         st.markdown("---")
@@ -403,4 +437,4 @@ if run:
 
     except Exception as e:
         st.error(f"حدث خطأ: {e}")
-        st.info("إذا تكرر الخطأ: قلّل نطاق الصفحات أو جرّب مرة أخرى لأن المشكلة غالبًا من JSON غير مكتمل/غير صحيح.")
+        st.info("إذا استمرت المشكلة: قلّل نطاق الصفحات (مثلاً 5-10 صفحات) لأن الرد قد يتقطع ويكسر JSON.")
