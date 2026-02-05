@@ -7,181 +7,138 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from io import BytesIO
 
 # ==========================================
-# 1. إعداد الصفحة
+# 1. إعداد الصفحة وتنسيق RTL
 # ==========================================
-st.set_page_config(page_title="المحلل التربوي العماني", layout="wide")
+st.set_page_config(page_title="نظام تدقيق الاختبارات العماني", layout="wide")
 
 st.markdown("""
     <style>
     .stApp { direction: rtl; text-align: right; }
     div[data-testid="stSidebar"] { text-align: right; direction: rtl; }
     div[data-testid="stMarkdownContainer"] { text-align: right; direction: rtl; }
-    table { width: 100%; border-collapse: collapse; direction: rtl; }
+    table { width: 100%; border-collapse: collapse; direction: rtl; margin-bottom: 20px; }
     th, td { border: 1px solid #ddd; padding: 10px; text-align: right; }
-    th { background-color: #f0f2f6; font-weight: bold; }
+    th { background-color: #f8f9fa; }
     </style>
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. دوال المعالجة (Word & PDF)
+# 2. الدوال المساعدة
 # ==========================================
 
-def get_pdf_text(file):
+def extract_pdf_text(file):
     if not file: return ""
-    try:
-        doc = fitz.open(stream=file.read(), filetype="pdf")
-        return "".join([page.get_text() for page in doc])
-    except: return ""
+    doc = fitz.open(stream=file.read(), filetype="pdf")
+    return "".join([page.get_text() for page in doc])
 
-def create_docx(data, subject, grade, semester, exam_type):
+def generate_word(data, subject, grade, semester, exam_type):
     doc = Document()
-    
-    # الترويسة
-    title = doc.add_heading(f'تقرير فني: اختبار {subject}', 0)
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    doc.add_paragraph(f'الصف: {grade} | الفصل: {semester} | نوع الاختبار: {exam_type}')
-    doc.add_paragraph('-' * 70)
+    # العناوين
+    header = doc.add_heading(f'تقرير تحليل اختبار {subject}', 0)
+    header.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    doc.add_paragraph(f'الصف: {grade} | الفصل: {semester} | النوع: {exam_type}').alignment = WD_ALIGN_PARAGRAPH.CENTER
+    doc.add_paragraph("-" * 50)
 
-    def draw_table(headers, rows):
-        if not rows: return
-        table = doc.add_table(rows=1, cols=len(headers))
-        table.style = 'Table Grid'
-        table.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        for i, h in enumerate(headers):
-            table.rows[0].cells[i].text = h
-            table.rows[0].cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        for row_data in rows:
-            row_cells = table.add_row().cells
-            for i, val in enumerate(row_data):
-                row_cells[i].text = str(val)
-                row_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        doc.add_paragraph('\n')
+    # جدول 1
+    doc.add_heading('1. تحليل المفردات', level=1)
+    table1 = doc.add_table(rows=1, cols=6)
+    table1.style = 'Table Grid'
+    hdrs = ["م", "الهدف", "المستوى", "الدرجة", "الملاحظة", "التعديل"]
+    for i, h in enumerate(hdrs): table1.rows[0].cells[i].text = h
+    for item in data.get("vocab", []):
+        row = table1.add_row().cells
+        row[0].text = str(item.get("q"))
+        row[1].text = item.get("obj")
+        row[2].text = item.get("level")
+        row[3].text = str(item.get("mark"))
+        row[4].text = item.get("note")
+        row[5].text = item.get("fix")
 
-    # الجداول
-    doc.add_heading('1. جدول تحليل المفردات', level=1)
-    if "vocab" in data:
-        h = ["م", "الهدف", "المستوى", "الدرجة", "الملاحظة", "التعديل"]
-        r = [[x.get("q"), x.get("obj"), x.get("level"), x.get("mark"), x.get("note"), x.get("fix")] for x in data.get("vocab", [])]
-        draw_table(h, r)
-
+    # جدول 2
     doc.add_heading('2. الجدول العامل', level=1)
-    if "specs" in data:
-        h = ["البند", "النتيجة", "التقييم"]
-        s = data["specs"]
-        r = [
-            ["عدد الأسئلة", s.get("q_count", {}).get("val"), s.get("q_count", {}).get("status")],
-            ["التغطية", s.get("lessons", {}).get("val"), s.get("lessons", {}).get("status")],
-            ["مجموع AO1", s.get("ao1", {}).get("val"), s.get("ao1", {}).get("status")],
-            ["مجموع AO2", s.get("ao2", {}).get("val"), s.get("ao2", {}).get("status")],
-            ["المشتتات", s.get("mcq", {}).get("val"), s.get("mcq", {}).get("status")],
-            ["الوضوح", s.get("clarity", {}).get("val"), s.get("clarity", {}).get("status")]
-        ]
-        draw_table(h, r)
+    table2 = doc.add_table(rows=1, cols=3)
+    table2.style = 'Table Grid'
+    hdrs2 = ["البند", "البيان", "التقييم"]
+    for i, h in enumerate(hdrs2): table2.rows[0].cells[i].text = h
+    specs = data.get("specs", {})
+    mapping = {"q_count":"عدد الأسئلة", "lessons":"تغطية الدروس", "ao1":"درجات AO1", "ao2":"درجات AO2", "mcq":"المشتتات", "clarity":"الوضوح"}
+    for key, label in mapping.items():
+        row = table2.add_row().cells
+        item = specs.get(key, {})
+        row[0].text = label
+        row[1].text = str(item.get("val", "-"))
+        row[2].text = item.get("status", "-")
 
     doc.add_heading('3. التقدير العام', level=1)
-    p = doc.add_paragraph(data.get("summary", ""))
-    p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    doc.add_paragraph(data.get("summary", ""))
 
-    buffer = BytesIO()
-    doc.save(buffer)
-    buffer.seek(0)
-    return buffer
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf
 
 # ==========================================
-# 3. الواجهة الجانبية (الإعدادات الصحيحة)
+# 3. الواجهة الجانبية (تم التعديل بدقة)
 # ==========================================
 
 with st.sidebar:
-    st.header("⚙️ إعدادات التحليل")
+    st.header("⚙️ الإعدادات")
     api_key = st.text_input("مفتاح API:", type="password")
     
-    # 1. المواد (بدون رياضيات)
+    # المواد المطلوبة فقط
     subject = st.selectbox("المادة:", ["فيزياء", "كيمياء", "أحياء", "علوم"])
     
-    # 2. الصفوف (بدون عاشر)
+    # الصفوف المطلوبة فقط
     grade = st.selectbox("الصف:", ["11", "12"])
     
-    # 3. الفصل ونوع الاختبار (موجودان كما طلبت)
+    # الفصل والنوع (تم إبقاؤهما كما طلبت)
     semester = st.selectbox("الفصل الدراسي:", ["الأول", "الثاني"])
     exam_type = st.selectbox("نوع الاختبار:", ["قصير", "تجريبي/نهائي"])
     
-    pages_range = st.text_input("نطاق صفحات الكتاب:", "مثال: 10-30")
+    pages = st.text_input("نطاق الصفحات:", "1-50")
 
 # ==========================================
-# 4. التطبيق الرئيسي
+# 4. الجسم الرئيسي
 # ==========================================
 
-st.title(f"🔍 مدقق اختبارات {subject} ({semester})")
-st.info("نظام تدقيق الاختبارات وفق وثيقة تقويم تعلم الطلبة - سلطنة عمان")
+st.title(f"🔍 تدقيق اختبار {subject} - الصف {grade}")
 
-col1, col2, col3 = st.columns(3)
-with col1: f_test = st.file_uploader("1. ملف الاختبار (PDF)", type="pdf")
-with col2: f_policy = st.file_uploader("2. وثيقة التقويم (PDF)", type="pdf")
-with col3: f_book = st.file_uploader("3. كتاب الطالب (PDF)", type="pdf")
+c1, c2, c3 = st.columns(3)
+with c1: f_test = st.file_uploader("ملف الاختبار", type="pdf")
+with c2: f_policy = st.file_uploader("وثيقة التقويم", type="pdf")
+with c3: f_book = st.file_uploader("كتاب الطالب", type="pdf")
 
-if st.button("🚀 بدء التحليل") and api_key and f_test:
+if st.button("🚀 تنفيذ التحليل") and api_key and f_test:
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel('gemini-1.5-flash')
     
-    with st.spinner("جاري التحليل..."):
-        txt_test = get_pdf_text(f_test)
-        txt_book = get_pdf_text(f_book)
-        txt_policy = get_pdf_text(f_policy)
+    with st.spinner("جاري التحليل وفق المعايير..."):
+        t1 = extract_pdf_text(f_test)
+        t2 = extract_pdf_text(f_policy)
+        t3 = extract_pdf_text(f_book)
         
-        prompt = f"""
-        أنت خبير مناهج في سلطنة عمان.
-        المادة: {subject} | الصف: {grade} | الفصل: {semester} | نوع الاختبار: {exam_type}.
-        
-        المهمة: قارن الأسئلة بصفحات الكتاب ({pages_range}) وبنود الوثيقة.
-        
-        المطلوب JSON فقط:
-        {{
-            "vocab": [ {{"q": "1", "obj": "...", "level": "AO1", "mark": "1", "note": "...", "fix": "..."}} ],
-            "specs": {{
-                "q_count": {{"val": "...", "status": "..."}},
-                "lessons": {{"val": "...", "status": "..."}},
-                "ao1": {{"val": "...", "status": "..."}},
-                "ao2": {{"val": "...", "status": "..."}},
-                "mcq": {{"val": "...", "status": "..."}},
-                "clarity": {{"val": "...", "status": "..."}}
-            }},
-            "summary": "التقرير الختامي."
-        }}
-
-        البيانات:
-        الاختبار: {txt_test[:15000]}
-        الكتاب: {txt_book[:15000]}
-        الوثيقة: {txt_policy[:5000]}
-        """
+        prompt = f"حلل اختبار {subject} صف {grade} فصل {semester}. قارن مع صفحات الكتاب {pages}. أخرج JSON حصراً: {{'vocab': [{{'q':'1','obj':'','level':'','mark':'','note':'','fix':''}}], 'specs': {{'q_count':{{'val':'','status':''}},'lessons':{{'val':'','status':''}},'ao1':{{'val':'','status':''}},'ao2':{{'val':'','status':''}},'mcq':{{'val':'','status':''}},'clarity':{{'val':'','status':''}}}}, 'summary': ''}}. البيانات: {t1[:10000]} {t2[:3000]} {t3[:5000]}"
         
         try:
             res = model.generate_content(prompt)
-            clean_json = res.text.replace("```json", "").replace("```", "").strip()
-            if "{" in clean_json: clean_json = clean_json[clean_json.find("{"):clean_json.rfind("}")+1]
-            data = json.loads(clean_json)
+            js_str = res.text.replace("```json","").replace("```","").strip()
+            data = json.loads(js_str[js_str.find("{"):js_str.rfind("}")+1])
             
-            st.success("تم التحليل بنجاح!")
+            st.success("اكتمل التحليل")
             
-            st.subheader("1. المفردات")
-            rows = ""
-            for i in data.get("vocab", []):
-                rows += f"<tr><td>{i['q']}</td><td>{i['obj']}</td><td>{i['level']}</td><td>{i['mark']}</td><td>{i['note']}</td><td>{i['fix']}</td></tr>"
+            # عرض الجداول
+            st.subheader("تحليل المفردات")
+            rows = "".join([f"<tr><td>{i['q']}</td><td>{i['obj']}</td><td>{i['level']}</td><td>{i['mark']}</td><td>{i['note']}</td><td>{i['fix']}</td></tr>" for i in data['vocab']])
             st.markdown(f"<table><tr><th>م</th><th>الهدف</th><th>المستوى</th><th>الدرجة</th><th>الملاحظة</th><th>التعديل</th></tr>{rows}</table>", unsafe_allow_html=True)
             
-            st.subheader("2. الجدول العامل")
-            rows2 = ""
-            labels = {"q_count":"العدد", "lessons":"الدروس", "ao1":"AO1", "ao2":"AO2", "mcq":"المشتتات", "clarity":"الوضوح"}
-            for k,v in labels.items():
-                val = data.get("specs", {}).get(k, {})
-                rows2 += f"<tr><td>{v}</td><td>{val.get('val')}</td><td>{val.get('status')}</td></tr>"
-            st.markdown(f"<table><tr><th>البند</th><th>القيمة</th><th>التقييم</th></tr>{rows2}</table>", unsafe_allow_html=True)
+            st.subheader("الجدول العامل")
+            specs = data['specs']
+            s_rows = "".join([f"<tr><td>{lbl}</td><td>{specs[k]['val']}</td><td>{specs[k]['status']}</td></tr>" for k, lbl in {"q_count":"العدد","lessons":"الدروس","ao1":"AO1","ao2":"AO2","mcq":"المشتتات","clarity":"الوضوح"}.items()])
+            st.markdown(f"<table><tr><th>البند</th><th>القيمة</th><th>الحالة</th></tr>{s_rows}</table>", unsafe_allow_html=True)
             
-            st.subheader("3. التقدير العام")
-            st.info(data.get("summary"))
+            st.info(data['summary'])
             
-            # التمرير للدالة مع كافة المتغيرات
-            docx = create_docx(data, subject, grade, semester, exam_type)
-            st.download_button("📥 تحميل Word", docx, "Report.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            st.download_button("📥 تحميل التقرير (Word)", generate_word(data, subject, grade, semester, exam_type), "Report.docx")
             
         except Exception as e:
-            st.error("خطأ في قراءة الرد. حاول مرة أخرى.")
+            st.error("فشل التحليل، يرجى المحاولة مرة أخرى.")
