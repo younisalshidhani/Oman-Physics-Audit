@@ -23,7 +23,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. دوال المعالجة
+# 2. دوال المعالجة (Word & PDF)
 # ==========================================
 
 def get_pdf_text(file):
@@ -33,13 +33,13 @@ def get_pdf_text(file):
         return "".join([page.get_text() for page in doc])
     except: return ""
 
-def create_docx(data, subject, grade):
+def create_docx(data, subject, grade, semester, exam_type):
     doc = Document()
     
     # الترويسة
     title = doc.add_heading(f'تقرير فني: اختبار {subject}', 0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    doc.add_paragraph(f'الصف: {grade} | (تم التحليل بناءً على محتوى الملف المرفق)')
+    doc.add_paragraph(f'الصف: {grade} | الفصل: {semester} | نوع الاختبار: {exam_type}')
     doc.add_paragraph('-' * 70)
 
     def draw_table(headers, rows):
@@ -88,33 +88,38 @@ def create_docx(data, subject, grade):
     return buffer
 
 # ==========================================
-# 3. الواجهة (حسب طلبك بالضبط)
+# 3. الواجهة الجانبية (الإعدادات الصحيحة)
 # ==========================================
 
 with st.sidebar:
-    st.header("⚙️ الإعدادات")
+    st.header("⚙️ إعدادات التحليل")
     api_key = st.text_input("مفتاح API:", type="password")
     
-    # فقط القوائم التي سمحت بها
+    # 1. المواد (بدون رياضيات)
     subject = st.selectbox("المادة:", ["فيزياء", "كيمياء", "أحياء", "علوم"])
+    
+    # 2. الصفوف (بدون عاشر)
     grade = st.selectbox("الصف:", ["11", "12"])
     
-    # لا يوجد فصل دراسي ولا نوع اختبار هنا
+    # 3. الفصل ونوع الاختبار (موجودان كما طلبت)
+    semester = st.selectbox("الفصل الدراسي:", ["الأول", "الثاني"])
+    exam_type = st.selectbox("نوع الاختبار:", ["قصير", "تجريبي/نهائي"])
+    
     pages_range = st.text_input("نطاق صفحات الكتاب:", "مثال: 10-30")
 
 # ==========================================
-# 4. التشغيل
+# 4. التطبيق الرئيسي
 # ==========================================
 
-st.title(f"🔍 مدقق اختبارات {subject} (الصف {grade})")
-st.info("سيتم استنتاج الفصل الدراسي ونوع الاختبار تلقائياً من الملف.")
+st.title(f"🔍 مدقق اختبارات {subject} ({semester})")
+st.info("نظام تدقيق الاختبارات وفق وثيقة تقويم تعلم الطلبة - سلطنة عمان")
 
 col1, col2, col3 = st.columns(3)
 with col1: f_test = st.file_uploader("1. ملف الاختبار (PDF)", type="pdf")
 with col2: f_policy = st.file_uploader("2. وثيقة التقويم (PDF)", type="pdf")
 with col3: f_book = st.file_uploader("3. كتاب الطالب (PDF)", type="pdf")
 
-if st.button("🚀 تحليل") and api_key and f_test:
+if st.button("🚀 بدء التحليل") and api_key and f_test:
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel('gemini-1.5-flash')
     
@@ -123,15 +128,13 @@ if st.button("🚀 تحليل") and api_key and f_test:
         txt_book = get_pdf_text(f_book)
         txt_policy = get_pdf_text(f_policy)
         
-        # نطلب من الذكاء الاصطناعي تحديد الفصل ونوع الاختبار بنفسه
         prompt = f"""
         أنت خبير مناهج في سلطنة عمان.
-        المادة: {subject} - الصف: {grade}.
+        المادة: {subject} | الصف: {grade} | الفصل: {semester} | نوع الاختبار: {exam_type}.
         
-        التعليمات:
-        1. اقرأ ملف الاختبار وحدد (الفصل الدراسي) و (نوع الاختبار) تلقائياً.
-        2. قارن الأسئلة بصفحات الكتاب ({pages_range}) والوثيقة.
-        3. استخرج JSON فقط:
+        المهمة: قارن الأسئلة بصفحات الكتاب ({pages_range}) وبنود الوثيقة.
+        
+        المطلوب JSON فقط:
         {{
             "vocab": [ {{"q": "1", "obj": "...", "level": "AO1", "mark": "1", "note": "...", "fix": "..."}} ],
             "specs": {{
@@ -142,7 +145,7 @@ if st.button("🚀 تحليل") and api_key and f_test:
                 "mcq": {{"val": "...", "status": "..."}},
                 "clarity": {{"val": "...", "status": "..."}}
             }},
-            "summary": "ذكر الفصل الدراسي ونوع الاختبار الذي تم اكتشافه هنا، ثم التقرير."
+            "summary": "التقرير الختامي."
         }}
 
         البيانات:
@@ -157,7 +160,7 @@ if st.button("🚀 تحليل") and api_key and f_test:
             if "{" in clean_json: clean_json = clean_json[clean_json.find("{"):clean_json.rfind("}")+1]
             data = json.loads(clean_json)
             
-            st.success("تم!")
+            st.success("تم التحليل بنجاح!")
             
             st.subheader("1. المفردات")
             rows = ""
@@ -176,7 +179,9 @@ if st.button("🚀 تحليل") and api_key and f_test:
             st.subheader("3. التقدير العام")
             st.info(data.get("summary"))
             
-            st.download_button("📥 تحميل Word", create_docx(data, subject, grade), "Report.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            # التمرير للدالة مع كافة المتغيرات
+            docx = create_docx(data, subject, grade, semester, exam_type)
+            st.download_button("📥 تحميل Word", docx, "Report.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
             
         except Exception as e:
-            st.error("خطأ في التحليل.")
+            st.error("خطأ في قراءة الرد. حاول مرة أخرى.")
