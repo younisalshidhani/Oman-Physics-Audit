@@ -2,229 +2,221 @@ import streamlit as st
 import fitz  # PyMuPDF
 import google.generativeai as genai
 import json
-import re
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from io import BytesIO
 
 # ==========================================
-# 1. إعدادات الصفحة والتصميم
+# 1. إعداد الصفحة
 # ==========================================
-st.set_page_config(page_title="المحلل التربوي العماني", layout="wide")
+st.set_page_config(page_title="المحلل التربوي العماني (Pro)", layout="wide")
 
 st.markdown("""
     <style>
     .stApp { direction: rtl; text-align: right; }
     div[data-testid="stSidebar"] { text-align: right; direction: rtl; }
     div[data-testid="stMarkdownContainer"] { text-align: right; direction: rtl; }
-    .header-box { background: #f0f8ff; padding: 20px; border-radius: 10px; border-right: 8px solid #007bff; margin-bottom: 20px; }
-    table { width: 100%; direction: rtl; border-collapse: collapse; }
-    th, td { border: 1px solid #ddd; padding: 8px; text-align: right; }
-    th { background-color: #f2f2f2; font-weight: bold; }
+    table { width: 100%; border-collapse: collapse; direction: rtl; }
+    th, td { border: 1px solid #ddd; padding: 10px; text-align: right; }
+    th { background-color: #f0f2f6; font-weight: bold; }
+    .metric-box { background-color: #e8f4f8; padding: 15px; border-radius: 8px; border-right: 5px solid #007bff; margin-bottom: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. دوال المعالجة (PDF و Word)
+# 2. الدوال المساعدة (Word + PDF)
 # ==========================================
 
-def extract_text_from_pdf(uploaded_file):
-    if not uploaded_file: return ""
+def get_pdf_text(file):
+    """استخراج النص من ملف PDF"""
+    if not file: return ""
     try:
-        doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
-        text = "".join([page.get_text() for page in doc])
-        return text
-    except Exception as e:
-        return ""
+        doc = fitz.open(stream=file.read(), filetype="pdf")
+        return "".join([page.get_text() for page in doc])
+    except: return ""
 
-def create_word_docx(report_data, subject, grade, semester, exam_type):
+def create_docx(data, subject, grade, semester):
+    """إنشاء ملف Word احترافي"""
     doc = Document()
     
-    # عنوان التقرير
-    title = doc.add_heading(f'تقرير تحليل {exam_type} - مادة {subject}', 0)
+    # الترويسة
+    title = doc.add_heading(f'تقرير فني: اختبار {subject}', 0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    
-    p = doc.add_paragraph(f'الصف: {grade} | الفصل الدراسي: {semester}')
-    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    doc.add_paragraph('--------------------------------------------------------')
+    doc.add_paragraph(f'الصف: {grade} | الفصل: {semester} | حسب المعايير العمانية')
+    doc.add_paragraph('-' * 70)
 
-    # دالة مساعدة لرسم الجداول في الوورد
-    def add_table_to_doc(headers, rows):
+    # دالة رسم الجدول
+    def draw_table(headers, rows):
+        if not rows: return
         table = doc.add_table(rows=1, cols=len(headers))
         table.style = 'Table Grid'
         table.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        # ترويسة الجدول
-        hdr_cells = table.rows[0].cells
+        # تنسيق الرأس
         for i, h in enumerate(headers):
-            hdr_cells[i].text = h
-            hdr_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        
+            cell = table.rows[0].cells[i]
+            cell.text = h
+            cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
         # البيانات
         for row_data in rows:
             row_cells = table.add_row().cells
-            for i, item in enumerate(row_data):
-                row_cells[i].text = str(item)
+            for i, val in enumerate(row_data):
+                row_cells[i].text = str(val)
                 row_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        doc.add_paragraph('')
+        doc.add_paragraph('\n')
 
     # 1. جدول المفردات
-    doc.add_heading('1. جدول تحليل المفردات الامتحانية', level=1)
-    vocab_headers = ["رقم السؤال", "الهدف", "المستوى (AO1/AO2)", "الدرجة", "الملاحظة", "التعديل"]
-    vocab_rows = []
-    if "vocab_table" in report_data:
-        for item in report_data["vocab_table"]:
-            vocab_rows.append([
-                item.get("q_num", ""),
-                item.get("objective", ""),
-                item.get("level", ""),
-                item.get("marks", ""),
-                item.get("note", ""),
-                item.get("fix", "")
-            ])
-        add_table_to_doc(vocab_headers, vocab_rows)
+    doc.add_heading('أولاً: جدول تحليل المفردات', level=1)
+    if "vocab" in data and data["vocab"]:
+        headers = ["م", "الهدف التعليمي", "المستوى (AO1/AO2)", "الدرجة", "الملاحظة", "التعديل"]
+        rows = [[x.get("q"), x.get("obj"), x.get("level"), x.get("mark"), x.get("note"), x.get("fix")] for x in data["vocab"]]
+        draw_table(headers, rows)
 
     # 2. الجدول العامل
-    doc.add_heading('2. الجدول العامل (المواصفات الفنية)', level=1)
-    working_headers = ["البند", "القيمة / العدد", "التقييم"]
-    working_rows = []
-    if "working_table" in report_data:
-        wt = report_data["working_table"]
-        # ترتيب العناصر
-        keys_order = ["total_questions", "lessons_count", "ao1_marks", "ao2_marks", "mcq_distractors", "clarity"]
-        labels = {
-            "total_questions": "عدد المفردات", "lessons_count": "عدد الدروس", 
-            "ao1_marks": "درجات المعرفة (AO1)", "ao2_marks": "درجات التطبيق (AO2)",
-            "mcq_distractors": "المشتتات (MCQ)", "clarity": "جودة الرسوم والخط"
-        }
-        for k in keys_order:
-            val = wt.get(k, {})
-            working_rows.append([labels.get(k, k), val.get("value", "-"), val.get("status", "-")])
-        add_table_to_doc(working_headers, working_rows)
+    doc.add_heading('ثانياً: الجدول العامل والمواصفات', level=1)
+    if "specs" in data and data["specs"]:
+        headers = ["البند", "النتيجة / العدد", "التقييم"]
+        s = data["specs"]
+        rows = [
+            ["عدد المفردات", s.get("q_count", {}).get("val"), s.get("q_count", {}).get("status")],
+            ["تغطية الدروس", s.get("lessons", {}).get("val"), s.get("lessons", {}).get("status")],
+            ["درجات المعرفة (AO1)", s.get("ao1", {}).get("val"), s.get("ao1", {}).get("status")],
+            ["درجات التطبيق (AO2)", s.get("ao2", {}).get("val"), s.get("ao2", {}).get("status")],
+            ["جودة المشتتات (MCQ)", s.get("mcq", {}).get("val"), s.get("mcq", {}).get("status")],
+            ["الوضوح الفني", s.get("clarity", {}).get("val"), s.get("clarity", {}).get("status")]
+        ]
+        draw_table(headers, rows)
 
-    # 3. التقدير العام
-    doc.add_heading('3. التقدير العام', level=1)
-    if "summary" in report_data:
-        p = doc.add_paragraph(report_data["summary"])
-        p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    # 3. الملخص
+    doc.add_heading('ثالثاً: التقدير العام', level=1)
+    p = doc.add_paragraph(data.get("summary", "لا يوجد ملخص"))
+    p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
 
+    # الحفظ
     buffer = BytesIO()
     doc.save(buffer)
     buffer.seek(0)
     return buffer
 
 # ==========================================
-# 3. الواجهة الجانبية (Sidebar) - معدلة حسب طلبك
+# 3. الواجهة الجانبية (تم ضبطها بدقة)
 # ==========================================
 
 with st.sidebar:
-    st.header("⚙️ إعدادات التدقيق")
+    st.header("⚙️ إعدادات التحليل")
     api_key = st.text_input("مفتاح API:", type="password")
     
-    # 1. المواد المحددة فقط
+    # القوائم كما طلبت بالضبط
     subject = st.selectbox("المادة:", ["فيزياء", "كيمياء", "أحياء", "علوم"])
+    grade = st.selectbox("الصف:", ["11", "12"])
     
-    # 2. الصفوف المحددة فقط
-    grade = st.selectbox("المرحلة الصفية:", ["11", "12"])
-    
-    # 3. استعادة الفصل ونوع الاختبار (ضروري للدقة)
+    # إعادة الفصل ونوع الاختبار (ضروري جداً للدقة)
     semester = st.selectbox("الفصل الدراسي:", ["الأول", "الثاني"])
     exam_type = st.selectbox("نوع الاختبار:", ["قصير", "تجريبي/نهائي"])
     
-    pages = st.text_input("نطاق الصفحات للكتاب:", "مثلاً: 20-45")
+    pages_range = st.text_input("نطاق صفحات الكتاب:", "مثال: 10-30")
 
 # ==========================================
-# 4. الجسم الرئيسي للتطبيق
+# 4. التطبيق الرئيسي
 # ==========================================
 
-st.markdown(f'<div class="header-box"><h2>🇴🇲 نظام تحليل اختبارات {subject} (الصف {grade})</h2><p>مطابقة المعايير + تصدير ملف Word</p></div>', unsafe_allow_html=True)
+st.title(f"🔍 مدقق الاختبارات العماني: {subject} ({grade})")
+st.markdown(f'<div class="metric-box">يتم التحليل وفق: وثيقة تقويم تعلم الطلبة - الفصل {semester}</div>', unsafe_allow_html=True)
 
 col1, col2, col3 = st.columns(3)
-with col1: t_file = st.file_uploader("1. ملف الاختبار (PDF)", type="pdf")
-with col2: p_file = st.file_uploader("2. وثيقة التقويم (PDF)", type="pdf")
-with col3: b_file = st.file_uploader("3. كتاب الطالب (PDF)", type="pdf")
+with col1: f_test = st.file_uploader("1. ملف الاختبار (PDF)", type="pdf")
+with col2: f_policy = st.file_uploader("2. وثيقة التقويم (PDF)", type="pdf")
+with col3: f_book = st.file_uploader("3. كتاب الطالب (PDF)", type="pdf")
 
-if st.button("🚀 بدء التحليل الرسمي") and api_key and t_file:
-    try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+if st.button("🚀 بدء التحليل الشامل") and api_key and f_test:
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    
+    with st.spinner("جاري تحليل المفردات ومطابقة المعايير... (يرجى الانتظار)"):
+        # قراءة الملفات
+        txt_test = get_pdf_text(f_test)
+        txt_book = get_pdf_text(f_book)
+        txt_policy = get_pdf_text(f_policy)
         
-        with st.spinner("جاري قراءة الملفات وتحليل المفردات..."):
-            # استخراج النصوص
-            txt_test = extract_text_from_pdf(t_file)
-            txt_book = extract_text_from_pdf(b_file)
-            txt_policy = extract_text_from_pdf(p_file)
-            
-            # التعليمات للذكاء الاصطناعي (Prompt)
-            prompt = f"""
-            أنت خبير تقويم تربوي في سلطنة عمان. حلل اختبار مادة {subject} للصف {grade} الفصل {semester}.
-            
-            المطلوب: استخراج البيانات بصيغة JSON حصراً لملء الجداول التالية.
+        # البرومبت (الدماغ المحرك)
+        prompt = f"""
+        أنت خبير مناهج في سلطنة عمان. دورك هو تدقيق اختبار مادة {subject} للصف {grade} الفصل {semester}.
+        نوع الاختبار: {exam_type}.
 
-            هيكل JSON المطلوب:
-            {{
-                "vocab_table": [
-                    {{ "q_num": "1", "objective": "الهدف", "level": "AO1", "marks": "1", "note": "ملاحظة", "fix": "تعديل" }}
-                ],
-                "working_table": {{
-                    "total_questions": {{ "value": "العدد", "status": "مناسب/غير مناسب" }},
-                    "lessons_count": {{ "value": "العدد التقريبي", "status": "-" }},
-                    "ao1_marks": {{ "value": "المجموع", "status": "-" }},
-                    "ao2_marks": {{ "value": "المجموع", "status": "-" }},
-                    "mcq_distractors": {{ "value": "وصف المشتتات", "status": "جيد/ضعيف" }},
-                    "clarity": {{ "value": "وصف الخط والرسوم", "status": "واضح/غير واضح" }}
-                }},
-                "summary": "نص التقدير العام ونسبة المطابقة."
-            }}
+        المهمة: قارن الأسئلة بمحتوى الكتاب (الصفحات {pages_range}) ومعايير وثيقة التقويم.
+        
+        أخرج النتيجة بصيغة JSON فقط (بدون مقدمات) لملء الجداول التالية:
+        1. "vocab": قائمة بالمفردات (رقم السؤال، الهدف، المستوى AO1/AO2، الدرجة، ملاحظة، تعديل).
+        2. "specs": الجدول العامل (عدد المفردات، تغطية الدروس، مجموع درجات AO1 و AO2، جودة المشتتات، الوضوح).
+        3. "summary": رأي خبير مختصر في جودة الاختبار.
 
-            البيانات:
-            الاختبار: {txt_test[:15000]}
-            الكتاب (نطاق {pages}): {txt_book[:15000]}
-            الوثيقة: {txt_policy[:5000]}
-            """
+        هيكل JSON المطلوب:
+        {{
+            "vocab": [
+                {{"q": "1", "obj": "...", "level": "AO1", "mark": "1", "note": "...", "fix": "..."}}
+            ],
+            "specs": {{
+                "q_count": {{"val": "...", "status": "..."}},
+                "lessons": {{"val": "...", "status": "..."}},
+                "ao1": {{"val": "...", "status": "..."}},
+                "ao2": {{"val": "...", "status": "..."}},
+                "mcq": {{"val": "...", "status": "..."}},
+                "clarity": {{"val": "...", "status": "..."}}
+            }},
+            "summary": "..."
+        }}
 
+        البيانات:
+        الاختبار: {txt_test[:15000]}
+        الكتاب: {txt_book[:15000]}
+        الوثيقة: {txt_policy[:5000]}
+        """
+        
+        try:
+            # إرسال الطلب
             response = model.generate_content(prompt)
             
-            # تنظيف رد الذكاء الاصطناعي لاستخراج JSON
-            text_resp = response.text
-            json_str = text_resp.replace("```json", "").replace("```", "").strip()
-            # محاولة إصلاح سريعة إذا كان هناك نص قبل القوس
-            if "{" in json_str:
-                json_str = json_str[json_str.find("{"):json_str.rfind("}")+1]
+            # تنظيف الرد (لضمان عمل الـ JSON)
+            clean_json = response.text.replace("```json", "").replace("```", "").strip()
+            if "{" in clean_json:
+                clean_json = clean_json[clean_json.find("{"):clean_json.rfind("}")+1]
+            
+            data = json.loads(clean_json)
+            
+            # عرض النتائج
+            st.success("✅ تم التحليل بنجاح!")
+            
+            # 1. جدول المفردات
+            st.subheader("1. جدول تحليل المفردات")
+            rows_html = ""
+            for item in data.get("vocab", []):
+                rows_html += f"<tr><td>{item.get('q')}</td><td>{item.get('obj')}</td><td>{item.get('level')}</td><td>{item.get('mark')}</td><td>{item.get('note')}</td><td>{item.get('fix')}</td></tr>"
+            st.markdown(f"<table><tr><th>م</th><th>الهدف</th><th>المستوى</th><th>الدرجة</th><th>الملاحظة</th><th>التعديل</th></tr>{rows_html}</table>", unsafe_allow_html=True)
+            
+            # 2. الجدول العامل
+            st.subheader("2. الجدول العامل (المطابقة)")
+            specs = data.get("specs", {})
+            labels = {
+                "q_count": "عدد الأسئلة", "lessons": "تغطية الدروس", 
+                "ao1": "مجموع المعرفة (AO1)", "ao2": "مجموع التطبيق (AO2)", 
+                "mcq": "جودة المشتتات", "clarity": "الوضوح الفني"
+            }
+            rows_specs = ""
+            for k, lbl in labels.items():
+                val = specs.get(k, {})
+                rows_specs += f"<tr><td>{lbl}</td><td>{val.get('val')}</td><td>{val.get('status')}</td></tr>"
+            st.markdown(f"<table><tr><th>البند</th><th>القيمة / الوصف</th><th>التقييم</th></tr>{rows_specs}</table>", unsafe_allow_html=True)
 
-            try:
-                data = json.loads(json_str)
-                
-                # عرض الجداول في الموقع
-                st.success("تم التحليل بنجاح! النتائج بالأسفل 👇")
-                
-                # 1. عرض جدول المفردات
-                st.subheader("1. جدول تحليل المفردات")
-                v_rows = ""
-                for r in data.get("vocab_table", []):
-                    v_rows += f"<tr><td>{r.get('q_num')}</td><td>{r.get('objective')}</td><td>{r.get('level')}</td><td>{r.get('marks')}</td><td>{r.get('note')}</td><td>{r.get('fix')}</td></tr>"
-                st.markdown(f"<table><tr><th>س</th><th>الهدف</th><th>المستوى</th><th>الدرجة</th><th>الملاحظة</th><th>التعديل</th></tr>{v_rows}</table>", unsafe_allow_html=True)
-
-                # 2. عرض الجدول العامل
-                st.subheader("2. الجدول العامل")
-                w_rows = ""
-                wt = data.get("working_table", {})
-                labels = {"total_questions": "عدد الأسئلة", "lessons_count": "عدد الدروس", "ao1_marks": "مجموع AO1", "ao2_marks": "مجموع AO2", "mcq_distractors": "المشتتات", "clarity": "الوضوح"}
-                for k, v in labels.items():
-                    item = wt.get(k, {})
-                    w_rows += f"<tr><td>{v}</td><td>{item.get('value')}</td><td>{item.get('status')}</td></tr>"
-                st.markdown(f"<table><tr><th>البند</th><th>القيمة</th><th>الحالة</th></tr>{w_rows}</table>", unsafe_allow_html=True)
-
-                # 3. عرض الملخص
-                st.subheader("3. التقدير العام")
-                st.info(data.get("summary"))
-
-                # 4. زر التحميل (Word)
-                docx = create_word_docx(data, subject, grade, semester, exam_type)
-                st.download_button("📥 تحميل التقرير (Word)", docx, "Report.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-
-            except Exception as e:
-                st.warning("حدث خطأ في تنسيق الجدول، لكن إليك النص الكامل للتحليل:")
-                st.markdown(response.text)
-
-    except Exception as e:
-        st.error(f"خطأ غير متوقع: {e}")
+            # 3. الملخص والتحميل
+            st.subheader("3. التقدير العام")
+            st.info(data.get("summary"))
+            
+            # زر Word
+            docx_file = create_docx(data, subject, grade, semester)
+            st.download_button("📥 تحميل التقرير (Word)", docx_file, f"Report_{subject}.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            
+        except Exception as e:
+            st.error("عذراً، حدث خطأ أثناء معالجة رد الذكاء الاصطناعي.")
+            st.warning("حاول مرة أخرى، أو تأكد من وضوح ملف الاختبار.")
+            with st.expander("تفاصيل الخطأ التقني (للمطور)"):
+                st.write(e)
+                st.write(response.text if 'response' in locals() else "No Response")
