@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Edu-Registry — واجهة اختبار</title>
+  <style>
+    :root { --bg:#0f172a; --card:#1e293b; --accent:#14b8a6; --text:#e2e8f0; --muted:#94a3b8; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: Tahoma, Arial, sans-serif; background:var(--bg); color:var(--text); }
+    header { padding:24px; text-align:center; border-bottom:1px solid #334155; }
+    header h1 { margin:0; font-size:22px; }
+    header p { margin:6px 0 0; color:var(--muted); font-size:14px; }
+    .container { max-width:820px; margin:0 auto; padding:24px; }
+    .buttons { display:flex; gap:12px; flex-wrap:wrap; justify-content:center; margin-bottom:20px; }
+    button { background:var(--accent); color:#06281f; border:none; padding:10px 18px; border-radius:8px;
+             font-size:15px; font-weight:bold; cursor:pointer; transition:opacity .2s; }
+    button:hover { opacity:.85; }
+    pre { background:var(--card); padding:16px; border-radius:10px; overflow:auto; min-height:120px;
+          direction:ltr; text-align:left; font-size:13px; line-height:1.6; border:1px solid #334155; }
+    .status { color:var(--muted); font-size:13px; margin-bottom:8px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Edu-Registry — واجهة الاختبار</h1>
+    <p>نموذج أولي (MVP) لعرض بيانات المدارس والمعلمين والمشرفين</p>
+  </header>
+  <div class="container">
+    <div class="buttons">
+      <button onclick="loadData('schools')">تحميل المدارس</button>
+      <button onclick="loadData('teachers')">تحميل المعلمين</button>
+      <button onclick="loadData('supervisors')">تحميل المشرفين</button>
+    </div>
+    <div class="status" id="status">اختر نوع البيانات لعرضها.</div>
+    <pre id="output">// ستظهر النتائج هنا</pre>
+  </div>
+
+  <script>
+    async function loadData(type) {
+      const status = document.getElementById('status');
+      const output = document.getElementById('output');
+      status.textContent = 'جاري التحميل...';
+      try {
+        const res = await fetch('/api/' + type);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        output.textContent = JSON.stringify(data, null, 2);
+        status.textContent = 'تم تحميل: ' + type + ' (' + (Array.isArray(data) ? data.length : 0) + ' عنصر)';
+      } catch (err) {
+        output.textContent = 'خطأ: ' + err.message;
+        status.textContent = 'فشل التحميل.';
+      }
+    }
+  </script>
+</body>
+</html>

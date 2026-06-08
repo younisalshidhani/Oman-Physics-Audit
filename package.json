@@ -1,0 +1,17 @@
+{
+  "name": "edu-registry",
+  "version": "1.0.0",
+  "description": "Edu-Registry — central read-only data registry for schools, teachers, and supervisors (MVP). Distinct from the NOOB coverage system.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": ["edu-registry", "education", "mvp", "express", "api", "oman", "standalone", "rest-api"],
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  }
+}
